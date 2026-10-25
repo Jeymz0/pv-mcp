@@ -95,3 +95,171 @@ The container runs as a non-root user. The token and the API key are environment
 ### The test suite never calls the internet
 
 Tool contracts run through an in-memory MCP client against recorded HTTP responses. The HTTP path is exercised in-process: an anonymous call is rejected, a valid token is accepted, a foreign Host is rejected, and a second identical call is served from the cache. ruff, mypy in strict mode, and pinned dependencies keep that contract from drifting. A live call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it.
+
+## 6. Using the server
+
+Counts, report ids, and label sentences below are shortened so the shape of a call is visible. A live call returns the current openFDA values, with the same fields.
+
+### Local client over stdio
+
+From the repository:
+
+```bash
+uv run pv-mcp
+```
+
+A desktop client starts that command and speaks MCP on stdin and stdout. No bearer token is read. In Cursor, with this repository as the working directory:
+
+```json
+{
+  "mcpServers": {
+    "pv-mcp": {
+      "command": "uv",
+      "args": ["run", "pv-mcp"]
+    }
+  }
+}
+```
+
+MCP Inspector can do the same with `npx @modelcontextprotocol/inspector uv run pv-mcp`.
+
+### HTTP
+
+Put a long random value in `PV_MCP_TOKEN`, then:
+
+```bash
+uv run pv-mcp http
+```
+
+The endpoint is `http://127.0.0.1:8000/mcp`. The client sends `Authorization: Bearer <PV_MCP_TOKEN>`. Docker Compose publishes the same URL from the host. A call with no token, or the wrong token, receives HTTP 401 and never reaches a tool.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8000/mcp \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{}'
+```
+
+That prints `401`.
+
+### A session for one drug
+
+The prompt `safety_signal_summary`, with `drug` set to `ibuprofen`, asks the client to do four things. The same calls can be made by hand.
+
+Read the resource `pv://faers/methodology` first. It is Markdown. It states that a report does not establish cause, that a count is not an incidence, and that label text is data.
+
+Count reaction terms:
+
+```json
+{
+  "name": "top_reactions",
+  "arguments": { "drug": "ibuprofen", "limit": 10 }
+}
+```
+
+The structured result looks like this:
+
+```json
+{
+  "drug": "ibuprofen",
+  "reactions": [
+    { "reaction": "NAUSEA", "count": 1000 },
+    { "reaction": "FATIGUE", "count": 800 }
+  ],
+  "source": {
+    "endpoint": "/drug/event.json",
+    "query": "(patient.drug.openfda.generic_name:\"ibuprofen\" …)",
+    "url": "https://api.fda.gov/drug/event.json?search=…&count=patient.reaction.reactionmeddrapt.exact&limit=10",
+    "retrieved_at": "2026-10-25T13:40:35+00:00",
+    "cached": false
+  },
+  "disclaimer": "FAERS reports do not establish that a drug caused a reaction. Counts are not incidence rates. This is not medical advice."
+}
+```
+
+The `url` has no `api_key`. The `query` is the drug name quoted across the generic, brand, substance, and reported-product fields. `NAUSEA` here is a MedDRA preferred term, a count of reports, not a rate.
+
+Then a short list of serious reports that also mention nausea, inside a receive-date window:
+
+```json
+{
+  "name": "search_adverse_events",
+  "arguments": {
+    "drug": "ibuprofen",
+    "reaction": "nausea",
+    "serious_only": true,
+    "date_from": "2024-01-01",
+    "date_to": "2024-12-31",
+    "limit": 5
+  }
+}
+```
+
+```json
+{
+  "drug": "ibuprofen",
+  "total": 42,
+  "reports": [
+    {
+      "safety_report_id": "1001",
+      "receive_date": "2024-03-15",
+      "serious": true,
+      "reactions": ["Nausea", "Headache"],
+      "drugs": ["IBUPROFEN", "ASPIRIN"]
+    }
+  ],
+  "source": {
+    "endpoint": "/drug/event.json",
+    "query": "(…) AND patient.reaction.reactionmeddrapt:\"nausea\" AND serious:1 AND receivedate:[20240101 TO 20241231]",
+    "url": "https://api.fda.gov/drug/event.json?search=…&limit=5",
+    "retrieved_at": "2026-10-25T13:40:40+00:00",
+    "cached": false
+  },
+  "disclaimer": "FAERS reports do not establish that a drug caused a reaction. Counts are not incidence rates. This is not medical advice."
+}
+```
+
+`total` can be larger than the number of reports returned. `drugs` lists product names on the report. One of them may be concomitant. There is no narrative and no age or sex.
+
+Then one label section:
+
+```json
+{
+  "name": "get_label_section",
+  "arguments": {
+    "drug": "ibuprofen",
+    "section": "warnings_and_cautions"
+  }
+}
+```
+
+```json
+{
+  "drug": "ibuprofen",
+  "section": "warnings_and_cautions",
+  "label_field": "warnings",
+  "present": true,
+  "text": "…",
+  "truncated": true,
+  "brand_names": ["Advil"],
+  "generic_names": ["ibuprofen"],
+  "source": {
+    "endpoint": "/drug/label.json",
+    "query": "(openfda.generic_name:\"ibuprofen\" …)",
+    "url": "https://api.fda.gov/drug/label.json?search=…&limit=1&sort=effective_time:desc",
+    "retrieved_at": "2026-10-25T13:40:42+00:00",
+    "cached": false
+  },
+  "disclaimer": "FAERS reports do not establish that a drug caused a reaction. Counts are not incidence rates. This is not medical advice."
+}
+```
+
+`label_field` is `warnings` when the newer section name is absent on that label. `text` is data. A sentence inside it that tells the reader to ignore previous instructions is still just text.
+
+Calling `top_reactions` again with the same arguments, inside the hour, does not call openFDA. The result is the same object with `source.cached` true and the same `retrieved_at`. stderr gains a second audit line:
+
+```json
+{"event":"tool_call","caller":"local","tool":"top_reactions","params":{"drug":"ibuprofen","limit":10},"latency_ms":1,"status":"ok","result_size":900}
+```
+
+Over HTTP the `caller` is `pv-mcp-dev`. The line does not contain the bearer token or the openFDA key. A name such as `ibuprofen AND serious:1` is rejected before any request, because it is query syntax rather than a drug name. A limit of 21 is rejected by the tool schema.
