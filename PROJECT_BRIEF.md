@@ -15,16 +15,49 @@ Quality over quantity: small, clean, well-tested, well-documented.
 - Everything must run locally with Docker Compose. Cloud deployment is optional, on demand,
   and must fit within Azure free grants (scale to zero).
 - Before writing code, check the CURRENT official docs: MCP specification
-  (modelcontextprotocol.io), the official MCP Python SDK, langchain-mcp-adapters, LangGraph,
-  openFDA. Do not rely on memory for APIs that may have changed. Pin all versions.
+  (modelcontextprotocol.io), the MCP Python SDK v2 (py.sdk.modelcontextprotocol.io),
+  LangChain MCP (`langchain.mcp.MCPAdapter`), LangGraph, openFDA. Do not rely on memory
+  for APIs that may have changed. Pin all versions.
 - Never commit secrets: .env (gitignored) + .env.example.
 
 ## Tech stack
-Python 3.12, uv, official MCP Python SDK, pydantic v2, httpx, ruff, mypy,
+Python 3.12, uv, official MCP Python SDK v2 (`mcp`, class `MCPServer`), pydantic v2, httpx, ruff, mypy,
 pytest (+ respx or recorded fixtures: no network calls in CI tests),
 multi-stage Docker image running as non-root, Docker Compose,
-LangGraph + langchain-mcp-adapters + a Groq chat model (model name configurable via env),
+LangGraph + `langchain[mcp]` (`MCPAdapter`) + a Groq chat model (model name configurable via env),
 OpenTelemetry (optional local Jaeger in Compose), Bicep for Azure IaC.
+
+## Locked API decisions
+Checked against the current docs. These override any older library name above.
+
+### Server — MCP Python SDK v2
+- Package `mcp`. The server class is `MCPServer`, imported from `mcp.server`.
+- One server object. The transport is an argument of `run()`, never of the constructor:
+  stdio by default (`mcp.run()`), Streamable HTTP with `mcp.run(transport="streamable-http", ...)`.
+  The HTTP endpoint is `/mcp`. The deprecated SSE transport is unused.
+- Tools, the FAERS resource, and the prompt are registered with `@mcp.tool()`, `@mcp.resource()`,
+  and `@mcp.prompt()`.
+- HTTP authentication follows the SDK model: a `TokenVerifier` (`verify_token` returns an
+  `AccessToken` or `None`) passed together with `AuthSettings`. The dev verifier accepts one
+  static token from the environment. stdio has no HTTP header to check, so it stays open.
+  Production OAuth 2.1 (Microsoft Entra ID) is an ADR, not an implementation.
+- Offline tests drive the server through an in-memory client session from this same SDK.
+
+### Agent — `langchain.mcp.MCPAdapter`
+- Dependency `langchain[mcp]>=1.4.0`. The namespace is beta and warns once per process on import.
+  `langchain-mcp-adapters` and `MultiServerMCPClient` are not dependencies.
+- `MCPAdapter` is a FastMCP 4 client. It reaches this `MCPServer` over stdio or Streamable HTTP.
+  It loads tools only: MCP prompts and resources have no wrapper, so `safety_signal_summary` and
+  the FAERS methodology resource stay on the server for Inspector, Claude Desktop, and Cursor.
+  The agent carries the same disclaimer in its own system prompt.
+- Targets: a `Path` to the server module (stdio), or an `http` URL ending in `/mcp`
+  (Streamable HTTP). The bearer token is set on a `fastmcp.Client` handed to `MCPAdapter`.
+  An in-process `MCPAdapter(server)` expects a FastMCP server instance, so the agent does not
+  embed the `MCPServer` object.
+- Tools are loaded with `async with MCPAdapter(...) as adapter: tools = await adapter.list_tools()`
+  and passed into the LangGraph graph.
+- Human review is a LangGraph interrupt on the drafted Markdown report (approve or edit), with a
+  checkpointer. The read-only pharmacovigilance tools are not paused one by one.
 
 ## Functional scope
 
@@ -66,7 +99,7 @@ Local cache (SQLite or diskcache, with TTL) for openFDA responses to respect rat
 optional openFDA API key via env.
 
 ### Agent client (integration + human review)
-A LangGraph agent connected to the MCP server through langchain-mcp-adapters, using a Groq model.
+A LangGraph agent. Its MCP tools come from `langchain.mcp.MCPAdapter` (`langchain[mcp]`), and the chat model is Groq.
 Use case: "Draft a safety signal summary for drug X".
 Flow: plan → call tools → draft a summary citing tool outputs → human-in-the-loop interrupt
 for approval/edit → save the approved report as Markdown. CLI entry point.
@@ -91,7 +124,8 @@ for approval/edit → save the approved report as Markdown. CLI entry point.
 - README: what & why, Mermaid architecture diagram, 5-minute quickstart (Docker Compose +
   MCP Inspector + Claude Desktop/Cursor config), example session, cost section.
 - `docs/adr/`: 0001 transports, 0002 authentication, 0003 untrusted tool output handling,
-  0004 caching & rate limits, 0005 LLM provider abstraction, 0006 deployment target & cost.
+  0004 caching & rate limits, 0005 LLM provider abstraction and the MCPAdapter client,
+  0006 deployment target & cost.
 - SECURITY.md: threat model (prompt injection / tool poisoning, data exfiltration, DoS,
   supply chain).
 
