@@ -1,4 +1,4 @@
-# pv-mcp
+# pv-mcp — an MCP server for public pharmacovigilance data
 
 pv-mcp is a read-only MCP server for public pharmacovigilance data from the U.S. Food and Drug Administration. A client can ask what FAERS has reported for a drug, and what the official label says. Every answer carries its query, the time the data were read, and a reminder that a report is not proof of cause.
 
@@ -36,7 +36,7 @@ Anonymous calls share a small quota. An API key raises that quota. The key is a 
 
 These descriptions follow the FDA’s public notes on the [drug-event API](https://open.fda.gov/apis/drug/event/), the [drug-label API](https://open.fda.gov/apis/drug/label/), [what the public dashboard withholds](https://www.fda.gov/drugs/cder-conversations/understanding-cders-postmarket-safety-surveillance-programs-and-public-data), and the [FOIA path for an individual narrative](https://www.fda.gov/drugs/fda-adverse-event-monitoring-system-aems/instructions-requesting-individual-case-reports).
 
-## 4. What the server does
+## 4. What the MCP server does
 
 The server exposes three tools, one resource, and one prompt.
 
@@ -54,7 +54,7 @@ The same process serves two transports. stdio is for a local client. Streamable 
 
 Docker Compose runs the HTTP server as a non-root user. The token and the API key come from the environment. The cache file sits on a volume.
 
-## 5. Decisions
+## 5. Decisions behind the MCP server
 
 ### Two endpoints, and no others
 
@@ -76,7 +76,7 @@ The cache key is a hash of the path and the public parameters. The API key is no
 
 Desktop clients speak stdio, which has no header to inspect, so that transport stays open. Streamable HTTP is the remote door. The deprecated SSE transport is unused. Both modes are one server object. The transport is chosen when the process starts. Binding every interface does not widen the Host check. DNS rebinding protection stays on, and a request that names another host is rejected.
 
-### HTTP is a resource server
+### The MCP server is a resource server
 
 Development uses one static bearer token from the environment, compared in constant time, accepted only for this server’s URL and the scope `pv:read`. A missing or wrong token is HTTP 401. The HTTP process exits on startup when the token is empty. The production identity provider is written down and left unimplemented: OAuth 2.1 with Microsoft Entra ID. Entra would issue the token. This server would verify audience, issuer, expiry, and scope, and the caller id would become the user. The shared dev client `pv-mcp-dev` puts every HTTP client in one rate-limit bucket and one audit identity. That is acceptable on a single machine and the wrong model on a shared host.
 
@@ -96,11 +96,11 @@ The container runs as a non-root user. The token and the API key are environment
 
 Tool contracts run through an in-memory MCP client against recorded HTTP responses. The HTTP path is exercised in-process: an anonymous call is rejected, a valid token is accepted, a foreign Host is rejected, and a second identical call is served from the cache. ruff, mypy in strict mode, and pinned dependencies keep that contract from drifting. A live call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it.
 
-## 6. Using the server
+## 6. Using the MCP server
 
 Counts, report ids, and label sentences below are shortened so the shape of a call is visible. A live call returns the current openFDA values, with the same fields.
 
-### Local client over stdio
+### Local MCP client over stdio
 
 From the repository:
 
@@ -123,7 +123,7 @@ A desktop client starts that command and speaks MCP on stdin and stdout. No bear
 
 MCP Inspector can do the same with `npx @modelcontextprotocol/inspector uv run pv-mcp`.
 
-### HTTP
+### MCP over HTTP
 
 Put a long random value in `PV_MCP_TOKEN`, then:
 
@@ -142,7 +142,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8000/mcp \
 
 That prints `401`.
 
-### A session for one drug
+### An MCP session for one drug
 
 The prompt `safety_signal_summary`, with `drug` set to `ibuprofen`, asks the client to do four things. The same calls can be made by hand.
 
