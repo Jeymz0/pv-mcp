@@ -26,7 +26,13 @@ def openfda() -> Iterator[respx.MockRouter]:
 
 @pytest.fixture
 async def mcp_client(openfda: respx.MockRouter) -> AsyncIterator[Client]:
-    settings = Settings(_env_file=None, openfda_api_key=None)
+    settings = Settings(
+        _env_file=None,
+        openfda_api_key=None,
+        openfda_cache_path=None,
+        pv_mcp_token=None,
+        pv_mcp_rate_limit_per_minute=60,
+    )
     server = build_server(settings=settings, clock=lambda: FIXED)
     async with Client(server, raise_exceptions=True) as client:
         yield client

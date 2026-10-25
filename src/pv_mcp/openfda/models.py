@@ -26,7 +26,15 @@ class SourceReference(BaseModel):
     endpoint: str = Field(description="openFDA path, for example /drug/event.json.")
     query: str = Field(description="Value of the search parameter sent to openFDA.")
     url: str = Field(description="Full request URL with the API key removed.")
-    retrieved_at: str = Field(description="UTC time the response was read, ISO-8601.")
+    retrieved_at: str = Field(
+        description=(
+            "UTC time openFDA was read, ISO-8601. Unchanged when the row is served from cache."
+        )
+    )
+    cached: bool = Field(
+        default=False,
+        description="True when this result was served from the local cache.",
+    )
 
 
 class AdverseEventReport(BaseModel):

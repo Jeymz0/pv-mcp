@@ -1,17 +1,25 @@
-"""Assemble the pv-mcp server. stdio is the only transport wired in this milestone."""
+"""Assemble the pv-mcp server. stdio is open; Streamable HTTP requires a dev token."""
 
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, date, datetime
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, TextIO
 
 import httpx
 from mcp.server import MCPServer
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import AnyHttpUrl, Field
 
+from pv_mcp.audit import AuditLog, AuditMiddleware
+from pv_mcp.auth import REQUIRED_SCOPE, StaticTokenVerifier
+from pv_mcp.cache import ResponseCache
 from pv_mcp.content import METHODOLOGY, safety_signal_prompt
+from pv_mcp.http_transport import resource_server_url
+from pv_mcp.limits import RateLimiter, RateLimitMiddleware
 from pv_mcp.openfda.client import OpenFdaClient, Sleeper
 from pv_mcp.openfda.models import (
     AdverseEventSearchResult,
@@ -43,12 +51,23 @@ def build_server(
     settings: Settings | None = None,
     clock: Callable[[], datetime] | None = None,
     sleeper: Sleeper | None = None,
+    http_auth: bool = False,
+    audit_stream: TextIO | None = None,
+    cache_path: Path | None = None,
 ) -> MCPServer:
-    """Build a server that talks to openFDA. Call ``run()`` to serve it over stdio."""
+    """Build a server that talks to openFDA.
+
+    stdio leaves ``http_auth`` false: there is no HTTP header to check.
+    Streamable HTTP passes ``http_auth=True`` and refuses to start without
+    ``PV_MCP_TOKEN``. The cache path defaults to the setting, which is unset
+    so tests stay isolated; the HTTP entrypoint passes a file path.
+    """
 
     resolved = settings if settings is not None else Settings()
     now = clock if clock is not None else _utc_now
     api_key = resolved.openfda_api_key.get_secret_value() if resolved.openfda_api_key else None
+    path = cache_path if cache_path is not None else resolved.openfda_cache_path
+    cache = ResponseCache(path, ttl_seconds=resolved.openfda_cache_ttl_seconds) if path else None
     http = httpx.AsyncClient(
         base_url=resolved.openfda_base_url,
         timeout=httpx.Timeout(resolved.openfda_timeout_seconds),
@@ -60,13 +79,21 @@ def build_server(
         api_key=api_key,
         clock=now,
         label_max_chars=resolved.label_max_chars,
+        cache=cache,
         **({"sleeper": sleeper} if sleeper is not None else {}),
     )
+    token_verifier, auth = _http_auth(resolved) if http_auth else (None, None)
     server: MCPServer = MCPServer(
         "pv-mcp",
         instructions=INSTRUCTIONS,
         version="0.1.0",
-        lifespan=_close_http(http),
+        token_verifier=token_verifier,
+        lifespan=_close_clients(http, cache),
+        auth=auth,
+        middleware=[
+            AuditMiddleware(AuditLog(audit_stream if audit_stream is not None else sys.stderr)),
+            RateLimitMiddleware(RateLimiter(resolved.pv_mcp_rate_limit_per_minute)),
+        ],
     )
     _register_tools(server, client)
     _register_resource(server)
@@ -74,8 +101,52 @@ def build_server(
     return server
 
 
-def _close_http(
+def build_http_server(
+    *,
+    settings: Settings | None = None,
+    clock: Callable[[], datetime] | None = None,
+    sleeper: Sleeper | None = None,
+    audit_stream: TextIO | None = None,
+    cache_path: Path | None = None,
+) -> MCPServer:
+    """Streamable HTTP server. Fails closed when ``PV_MCP_TOKEN`` is missing."""
+
+    resolved = settings if settings is not None else Settings()
+    if resolved.pv_mcp_token is None:
+        raise ValueError("PV_MCP_TOKEN is required when serving Streamable HTTP.")
+    path = cache_path if cache_path is not None else resolved.openfda_cache_path
+    if path is None:
+        path = Path(".cache/openfda.sqlite")
+    return build_server(
+        settings=resolved,
+        clock=clock,
+        sleeper=sleeper,
+        http_auth=True,
+        audit_stream=audit_stream,
+        cache_path=path,
+    )
+
+
+def _http_auth(settings: Settings) -> tuple[StaticTokenVerifier, AuthSettings]:
+    if settings.pv_mcp_token is None:
+        raise ValueError("PV_MCP_TOKEN is required when serving Streamable HTTP.")
+    resource = AnyHttpUrl(resource_server_url(settings))
+    verifier = StaticTokenVerifier(
+        settings.pv_mcp_token.get_secret_value(),
+        resource=str(resource),
+    )
+    auth = AuthSettings(
+        issuer_url=AnyHttpUrl(settings.pv_mcp_issuer_url),
+        resource_server_url=resource,
+        required_scopes=[REQUIRED_SCOPE],
+        validate_token_resource=True,
+    )
+    return verifier, auth
+
+
+def _close_clients(
     http: httpx.AsyncClient,
+    cache: ResponseCache | None,
 ) -> Callable[[MCPServer], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
@@ -83,6 +154,8 @@ def _close_http(
             yield None
         finally:
             await http.aclose()
+            if cache is not None:
+                cache.close()
 
     return lifespan
 

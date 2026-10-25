@@ -1,0 +1,19 @@
+services:
+  pv-mcp:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PV_MCP_TRANSPORT: http
+      PV_MCP_HTTP_HOST: 0.0.0.0
+      PV_MCP_HTTP_PORT: "8000"
+      PV_MCP_RESOURCE_URL: http://127.0.0.1:8000/mcp
+      OPENFDA_CACHE_PATH: /data/openfda.sqlite
+    volumes:
+      - pv-mcp-cache:/data
+
+volumes:
+  pv-mcp-cache:

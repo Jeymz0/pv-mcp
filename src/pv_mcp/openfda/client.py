@@ -1,12 +1,14 @@
 """HTTP client for the openFDA drug event and drug label endpoints."""
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from pv_mcp.cache import ResponseCache, cache_key
 from pv_mcp.openfda.models import (
     AdverseEventSearchResult,
     LabelSectionName,
@@ -43,6 +45,7 @@ class OpenFdaClient:
         clock: Callable[[], datetime],
         label_max_chars: int,
         sleeper: Sleeper = asyncio.sleep,
+        cache: ResponseCache | None = None,
     ) -> None:
         self._http = http
         self._base_url = base_url.rstrip("/")
@@ -50,6 +53,7 @@ class OpenFdaClient:
         self._clock = clock
         self._label_max_chars = label_max_chars
         self._sleeper = sleeper
+        self._cache = cache
 
     async def search_adverse_events(
         self,
@@ -107,21 +111,56 @@ class OpenFdaClient:
     async def _get_json(
         self, path: str, params: dict[str, str]
     ) -> tuple[dict[str, object] | None, SourceReference]:
+        now = self._clock().astimezone(UTC)
+        key = cache_key(path, params)
+        if self._cache is not None:
+            hit = self._cache.get(key, now=now)
+            if hit is not None:
+                status, body, retrieved_at = hit
+                source = self._source(path, params, retrieved_at, cached=True)
+                if status == 404:
+                    return None, source
+                if status >= 400:
+                    raise ToolError(f"openFDA returned HTTP {status}.")
+                return _decode_payload(body), source
+
         request_params = dict(params)
         if self._api_key:
             request_params["api_key"] = self._api_key
         response = await self._request(path, request_params)
-        source = SourceReference(
-            endpoint=path,
-            query=params.get("search", ""),
-            url=str(httpx.URL(self._base_url).join(path).copy_merge_params(params)),
-            retrieved_at=self._clock().astimezone(UTC).isoformat(timespec="seconds"),
-        )
+        retrieved_at = now.isoformat(timespec="seconds")
+        source = self._source(path, params, retrieved_at, cached=False)
         if response.status_code == 404:
+            self._remember(key, 404, response.content, retrieved_at, now)
             return None, source
         if response.status_code >= 400:
             raise ToolError(f"openFDA returned HTTP {response.status_code}.")
-        return _object_payload(response), source
+        payload = _decode_payload(response.content)
+        self._remember(key, 200, response.content, retrieved_at, now)
+        return payload, source
+
+    def _source(
+        self, path: str, params: dict[str, str], retrieved_at: str, *, cached: bool
+    ) -> SourceReference:
+        return SourceReference(
+            endpoint=path,
+            query=params.get("search", ""),
+            url=str(httpx.URL(self._base_url).join(path).copy_merge_params(params)),
+            retrieved_at=retrieved_at,
+            cached=cached,
+        )
+
+    def _remember(
+        self,
+        key: str,
+        status_code: int,
+        body: bytes,
+        retrieved_at: str,
+        now: datetime,
+    ) -> None:
+        if self._cache is None:
+            return
+        self._cache.put(key, status_code, body, retrieved_at, now=now)
 
     async def _request(self, path: str, params: dict[str, str]) -> httpx.Response:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -143,9 +182,9 @@ class OpenFdaClient:
         raise ToolError("openFDA did not respond.")
 
 
-def _object_payload(response: httpx.Response) -> dict[str, object]:
+def _decode_payload(body: bytes) -> dict[str, object]:
     try:
-        payload: object = response.json()
+        payload: object = json.loads(body)
     except ValueError as exc:
         raise ToolError("openFDA returned a body that was not JSON.") from exc
     if not isinstance(payload, dict):

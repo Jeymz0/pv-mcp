@@ -1,4 +1,4 @@
-.PHONY: test lint serve
+.PHONY: test lint serve serve-http
 
 test:
 	uv run pytest
@@ -10,3 +10,6 @@ lint:
 
 serve:
 	uv run pv-mcp
+
+serve-http:
+	uv run pv-mcp http
