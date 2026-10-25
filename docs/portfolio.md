@@ -112,9 +112,51 @@ stdio and Streamable HTTP are the two ways a client attaches. The tools, the res
 
 A person with a local checkout points Cursor, Claude Desktop, or MCP Inspector at `uv run pv-mcp` and asks, in ordinary language, what the public reports and the label say about a drug. The host lists the tools, calls the ones it needs, and shows the structured result. The same person can open `pv://faers/methodology` and run `safety_signal_summary` by name when they want that path fixed in advance.
 
-A remote client uses `http://127.0.0.1:8000/mcp` and the bearer token. Listing tools, reading the resource, calling a tool, and rendering the prompt are the same operations as over stdio. Docker Compose is that endpoint, reached from the host machine. Another program connects the same way, over stdio or over HTTP, and receives the same sourced numbers. It does not embed this process. A person can still read the citations before a summary is kept.
+A remote client uses `http://127.0.0.1:8000/mcp` and the bearer token. Listing tools, reading the resource, calling a tool, and rendering the prompt are the same operations as over stdio. Docker Compose is that endpoint, reached from the host machine. Another program can connect the same way, over stdio or over HTTP, without embedding this process. The agent that will do that is milestone M4. It is not built yet.
 
-## 7. Using the MCP server
+## 7. Milestones still planned, and MCP ideas beyond them
+
+M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. The milestones below are already set. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
+
+### M3 — continuous integration
+
+GitHub Actions runs ruff, mypy, pytest with coverage, and pip-audit on every push and pull request. The MCP surface stays as it is. The suite keeps calling recorded openFDA responses, not the live API.
+
+### M4 — an agent that uses the tools
+
+A LangGraph agent drafts a safety-signal summary for one drug. Its tools come from `langchain.mcp.MCPAdapter` (`langchain[mcp]`), over stdio or over `http://…/mcp` with the bearer token. The adapter loads tools only. It does not see `safety_signal_summary` or `pv://faers/methodology`, so the same limits and the same disclaimer live in the agent's own system prompt. The agent plans, calls the three existing tools, and drafts Markdown that cites their URLs and retrieval times. A person then approves or edits that draft. The approved text is saved. The chat model is Groq, and the model name is configurable. This is the planned step past a manual session: the model composes the calls. The server still returns sourced records. It does not write the summary, and it does not check the draft.
+
+### M5 — evaluation of that agent
+
+Ten to fifteen golden cases, run on demand because the Groq quota is limited. They check tool choice, numbers that appear in the tool outputs, refusal to follow instructions planted in a label or a report, and the presence of the disclaimer. LLM responses are cached. The run writes a Markdown report. A workflow dispatch holds the API key. This does not change the protocol surface.
+
+### M6 — image, scan, and a deploy workflow
+
+The workflow builds the image, scans it with Trivy, writes an SBOM, and pushes to GHCR. A separate, manually triggered workflow deploys with Bicep to Azure Container Apps at zero minimum replicas, using GitHub OIDC rather than a long-lived Azure secret, with a budget alert and a teardown command. The production Entra ID verifier described in the authentication decision is not part of this milestone.
+
+### M7 — the written account of the system
+
+The README gains the architecture diagram, the short quickstart, and an example session. `SECURITY.md` records the threat model: prompt injection, data exfiltration, denial of service, supply chain. Three architecture notes are still to write: untrusted tool output, the MCPAdapter client, and the deployment cost. M7 documents the server. It does not extend it.
+
+ClinicalTrials.gov is not in M3–M7. It stays out while the FAERS path is the one the agent and the evals rely on.
+
+### Later, not on this list
+
+The protocol can carry pharmacovigilance work that openFDA does not do. None of the following is assigned to a milestone.
+
+Resource templates would publish a drug as a dossier, for example `pv://drug/ibuprofen/reactions`, instead of three separate calls. A subscription on the label resource would tell a client when a weekly SPL update changed a boxed warning. openFDA only answers the request in front of it.
+
+Completion would suggest drug names and MedDRA terms as the person types. The public API expects an exact string and returns HTTP 404 when the string matches nothing.
+
+Elicitation would stop when a name matches several products or several labels, and ask the person which one to keep. The label tool today takes the newest matching label and does not ask.
+
+One new tool, also exposed as a resource, would join the top MedDRA terms to the adverse-reaction and warnings text and return a structured row: term, report count, whether that term was found in the sections just read, and the source of each half. The model would receive the comparison already made. Milestone M4 leaves that comparison to the agent. Putting it in the server is a later decision, and it has to be a tool if the agent is to see it, because the adapter does not load resources.
+
+Sampling would let the server gather the evidence, ask the host's model for a draft, and refuse any number that is not in that evidence. Milestone M4 does the opposite on purpose: the agent drafts, the person reviews, and the server stays a source of records. Sampling would couple the data server to the host's model. It is not planned.
+
+Whatever is added later stays inside the same limit. The server does not compute an incidence, and it does not advise a patient to start or stop a medicine.
+
+## 8. Using the MCP server
 
 Counts, report ids, and label sentences below are shortened so the shape of a call is visible. A live call returns the current openFDA values, with the same fields.
 
