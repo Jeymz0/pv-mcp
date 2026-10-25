@@ -96,7 +96,25 @@ The container runs as a non-root user. The token and the API key are environment
 
 Tool contracts run through an in-memory MCP client against recorded HTTP responses. The HTTP path is exercised in-process: an anonymous call is rejected, a valid token is accepted, a foreign Host is rejected, and a second identical call is served from the cache. ruff, mypy in strict mode, and pinned dependencies keep that contract from drifting. A live call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it.
 
-## 6. Using the MCP server
+## 6. What the MCP server takes from the protocol
+
+MCP is the contract between a host and this process. The host may be an editor, a desktop application, or another program. It discovers what the server offers, then calls it. pv-mcp uses the parts of that contract that fit a read-only public data source.
+
+A tool is a function the host's model may call. It has a name, a description written for the model, and a schema for the arguments. `search_adverse_events`, `top_reactions`, and `get_label_section` are those functions. An argument that fails the schema is rejected before openFDA is contacted. Each tool returns a typed object, so the client receives fields — the total, the reaction terms, the source URL, the retrieval time — rather than only a paragraph. Annotations mark every call read-only, non-destructive, safe to repeat, and dependent on a system outside the server. A failure comes back as a tool error the model can read, and the session stays open.
+
+A resource is a document the client reads by URI. `pv://faers/methodology` holds the limits of FAERS and of the labels. The server instructions, delivered when the session starts, point the model at that URI before it interprets a count. The host can show the resource on its own. It does not have to spend a tool call to fetch the method.
+
+A prompt is a template a person runs. `safety_signal_summary` takes a drug name and returns the same steps every time: read the methodology, call the three tools, cite the URL and the time, and keep any sentence found in a report or a label as data. The server stops at that template. The host's model writes the summary, and a person can check the citations.
+
+stdio and Streamable HTTP are the two ways a client attaches. The tools, the resource, and the prompt are the same on both. On HTTP the process is an MCP resource server: a bearer token scoped to `pv:read`, bound to this server's URL. A client that speaks the protocol needs no private library for this project. The server does not ask the host model to generate a completion on its behalf, does not solicit secrets from the user, and exposes no tool that writes.
+
+### How it can be used
+
+A person with a local checkout points Cursor, Claude Desktop, or MCP Inspector at `uv run pv-mcp` and asks, in ordinary language, what the public reports and the label say about a drug. The host lists the tools, calls the ones it needs, and shows the structured result. The same person can open `pv://faers/methodology` and run `safety_signal_summary` by name when they want that path fixed in advance.
+
+A remote client uses `http://127.0.0.1:8000/mcp` and the bearer token. Listing tools, reading the resource, calling a tool, and rendering the prompt are the same operations as over stdio. Docker Compose is that endpoint, reached from the host machine. Another program connects the same way, over stdio or over HTTP, and receives the same sourced numbers. It does not embed this process. A person can still read the citations before a summary is kept.
+
+## 7. Using the MCP server
 
 Counts, report ids, and label sentences below are shortened so the shape of a call is visible. A live call returns the current openFDA values, with the same fields.
 
