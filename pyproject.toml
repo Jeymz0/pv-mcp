@@ -1,0 +1,48 @@
+[project]
+name = "pv-mcp"
+version = "0.1.0"
+description = "Read-only MCP server for public pharmacovigilance data from openFDA."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx==0.28.1",
+    "mcp==2.3.0",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.16.1",
+]
+
+[project.scripts]
+pv-mcp = "pv_mcp.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "respx==0.23.1",
+    "ruff==0.17.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pv_mcp"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["pv_mcp"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
