@@ -6,9 +6,9 @@ import httpx
 import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
-from tests.conftest import FIXED
 
 from pv_mcp.openfda.client import OpenFdaClient
+from tests.conftest import FIXED
 
 
 @pytest.fixture

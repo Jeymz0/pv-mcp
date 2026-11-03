@@ -114,13 +114,13 @@ A person with a local checkout points Cursor, Claude Desktop, or MCP Inspector a
 
 A remote client uses `http://127.0.0.1:8000/mcp` and the bearer token. Listing tools, reading the resource, calling a tool, and rendering the prompt are the same operations as over stdio. Docker Compose is that endpoint, reached from the host machine. Another program can connect the same way, over stdio or over HTTP, without embedding this process. The agent that will do that is milestone M4. It is not built yet.
 
-## 7. Milestones still planned, and MCP ideas beyond them
+## 7. Milestones, and MCP ideas beyond them
 
-M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. The milestones below are already set. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
+M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow. From M4 onward the milestones are still planned. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
 
 ### M3 — continuous integration
 
-GitHub Actions runs ruff, mypy, pytest with coverage, and pip-audit on every push and pull request. The MCP surface stays as it is. The suite keeps calling recorded openFDA responses, not the live API.
+`.github/workflows/ci.yml` runs on every push and every pull request. It installs uv 0.13.5 and Python 3.12, syncs the lockfile with `uv sync --frozen`, then runs ruff (lint and format), mypy, and pytest. Coverage is measured on the `pv_mcp` package and the job fails below 90%. pip-audit then checks the runtime dependencies exported from the lockfile, with their hashes, and does not ask pip to resolve them again. `make ci` runs that same sequence on a local checkout. The MCP surface stays as it is. The suite keeps calling recorded openFDA responses, not the live API.
 
 ### M4 — an agent that uses the tools
 
@@ -138,7 +138,7 @@ The workflow builds the image, scans it with Trivy, writes an SBOM, and pushes t
 
 The README gains the architecture diagram, the short quickstart, and an example session. `SECURITY.md` records the threat model: prompt injection, data exfiltration, denial of service, supply chain. Three architecture notes are still to write: untrusted tool output, the MCPAdapter client, and the deployment cost. M7 documents the server. It does not extend it.
 
-ClinicalTrials.gov is not in M3–M7. It stays out while the FAERS path is the one the agent and the evals rely on.
+ClinicalTrials.gov is not in M4–M7. It stays out while the FAERS path is the one the agent and the evals rely on.
 
 ### Later, not on this list
 
