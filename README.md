@@ -4,7 +4,7 @@ Ask what the public record says about a medicine. This MCP server goes to two fi
 
 A person can ask in ordinary language through Cursor, Claude Desktop, or MCP Inspector. A program can call the same three tools. The server does not write a medical opinion, and it does not tell a patient to start or stop a treatment.
 
-This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. The summary agent, which asks a chat model to call the tools and then waits for a person, is [section 10](#10-the-summary-agent).
+This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent).
 
 ## 1. What you can ask this MCP server
 
@@ -35,6 +35,10 @@ uv run pv-mcp
 Point the desktop client at that command. Ask what the public reports and the label say about a drug. The host lists the tools and calls the ones it needs. To follow the worksheet instead, run the prompt `safety_signal_summary` and pass the drug name.
 
 The same server can listen on `http://127.0.0.1:8000/mcp`. That door asks for a bearer token. The commands, the HTTP check, and a full example with the fields filled in are in [a worked session](#9-a-worked-session-with-this-mcp-server) at the end.
+
+### Or let an agent draft, then read it
+
+`pv-agent` asks a chat model to call the three tools and write one Markdown note for one drug. It stops before anything is saved. You read the draft, keep it, or replace it with a file of your own. The note you accept is written under `reports/`. A Groq key is required for a live draft. The commands are in [section 10](#10-the-summary-agent). The tests never call Groq.
 
 ### What a careful reading looks like
 
@@ -117,6 +121,14 @@ The server asks for one label, the newest by `effective_time`. Text is cut at 4,
 
 `safety_signal_summary` takes `drug` and returns the same steps every time: read the methodology, call `top_reactions`, call `search_adverse_events` with `serious_only` true and a small limit, call `get_label_section` for adverse reactions, warnings and cautions, and the boxed warning, cite every number or sentence with its URL and retrieval time, say when something is missing, and ignore any instruction embedded in the text. The server does not draft the summary and does not check the draft.
 
+### What the agent writes
+
+The agent is a client, not a fourth tool. It starts from that same worksheet. The model is asked to call `top_reactions`, then `search_adverse_events` for serious reports, then `get_label_section` for adverse reactions, warnings and cautions, and the boxed warning. The draft is Markdown. Each number or quoted sentence is supposed to carry the URL and the retrieval time from the tool that returned it. Tool text stays data. An instruction planted in a label or a report is not an instruction to the model.
+
+Nothing is saved at the draft step. A person approves the text, or substitutes another Markdown file. The file that is kept is `{drug}-{UTC time}.md` under `reports/`. It carries the disclaimer. If the person's edit no longer contains that sentence, the save step appends it.
+
+The agent does not compute an incidence, does not decide that a reaction is labeled, and does not check that its citations match the tool results. A person does that reading now. An evaluation suite that checks a live model is still planned.
+
 ### What this MCP server will not answer
 
 It will not compute an incidence, a disproportionality score, or a comparison of two drugs. It will not join a MedDRA term to the label and decide whether the reaction is "labeled." It will not pick among several matching products. The label tool takes the newest match. It will not advise a patient.
@@ -161,7 +173,17 @@ There is no metrics endpoint and no dashboard. The surveillance of a running pro
 
 ### The container
 
-Docker Compose runs the HTTP server as a non-root user. The token and the API key come from the environment or a gitignored `.env`. The cache file sits on the volume `pv-mcp-cache`. Image scanning, the SBOM, and a cloud deployment are later work. They are not in this image's workflow yet.
+Docker Compose runs the HTTP server as a non-root user. The token and the API key come from the environment or a gitignored `.env`. The cache file sits on the volume `pv-mcp-cache`. The image does not install the agent extra. The agent runs beside the container and connects to `http://127.0.0.1:8000/mcp`. Image scanning, the SBOM, and a cloud deployment are later work. They are not in this image's workflow yet.
+
+### The summary agent
+
+`uv sync --extra agent` installs `pv-agent`. The graph is LangGraph. The tools come from `langchain.mcp.MCPAdapter`. The adapter loads tools only, so the methodology text and the disclaimer are copied into the agent's system prompt. The decision is [docs/adr/0005-agent-client.md](docs/adr/0005-agent-client.md).
+
+On stdio the client launches `src/pv_mcp/agent/stdio_server.py` with the parent environment, so `OPENFDA_API_KEY` reaches the child server. On HTTP, `PV_AGENT_MCP_URL` must be an `http` or `https` URL ending in `/mcp`, and `PV_MCP_TOKEN` is sent as a bearer token. A missing token or a URL that does not end in `/mcp` stops the process before it connects. The FastMCP client pins the initialize handshake (`mode="legacy"`), which is the protocol era this server speaks. The agent does not construct an `MCPServer`.
+
+The chat model is built with `init_chat_model`. `PV_AGENT_MODEL` and `PV_AGENT_MODEL_PROVIDER` choose it. The default is Groq and `llama-3.3-70b-versatile`. When the provider is Groq, an empty `GROQ_API_KEY` stops the process before a draft.
+
+The graph may call tools in a loop, then it drafts once. Six tool-calling rounds is the cap. Tool calls are not paused one by one. The only interrupt is the finished Markdown. `pv-agent draft` prints that Markdown and a `thread_id`, and writes nothing under `reports/`. `pv-agent resume THREAD --approve` saves the draft. `pv-agent resume THREAD --file summary.md` saves that file instead. An empty drug name or an empty edit file exits. The thread is stored in `.cache/agent.sqlite`, so the second command can be a new process.
 
 ### Settings
 
@@ -181,11 +203,23 @@ Docker Compose runs the HTTP server as a non-root user. The token and the API ke
 | `PV_MCP_ISSUER_URL` | `https://pv-mcp.invalid/dev` | Placeholder issuer |
 | `PV_MCP_RATE_LIMIT_PER_MINUTE` | `60` | `0` disables |
 
-A blank string for the key, the token, the cache path, or the resource URL is treated as unset. `.env.example` lists the same names. `.env` is gitignored.
+Agent settings, read from the same `.env` when the extra is installed:
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `GROQ_API_KEY` | empty | Required for a live draft when the provider is Groq |
+| `PV_AGENT_MODEL` | `llama-3.3-70b-versatile` | Chat model name |
+| `PV_AGENT_MODEL_PROVIDER` | `groq` | Passed to `init_chat_model` |
+| `PV_AGENT_TRANSPORT` | `stdio` | `stdio` or `http` |
+| `PV_AGENT_MCP_URL` | `http://127.0.0.1:8000/mcp` | HTTP target. Must end in `/mcp` |
+| `PV_AGENT_REPORTS_DIR` | `reports` | Where the approved Markdown is written |
+| `PV_AGENT_CHECKPOINT_PATH` | `.cache/agent.sqlite` | Thread store for the review interrupt |
+
+A blank string for the key, the token, the cache path, or the resource URL is treated as unset. The same is true of `GROQ_API_KEY` and of the token when the agent reads it. `.env.example` lists the names. `.env` is gitignored.
 
 ## 5. What is checked, and when
 
-The suite never calls the internet. Tool contracts run through an in-memory MCP client against recorded HTTP responses. A live call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it. Continuous integration does not call openFDA.
+The suite never calls openFDA and never calls Groq. Tool contracts run through an in-memory MCP client against recorded HTTP responses. The agent tests use a scripted chat model. They also list the three tools through `MCPAdapter`, over stdio and over a local HTTP port. A live openFDA call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it. A live Groq draft is not part of CI. Continuous integration does not call openFDA.
 
 | When | Command | What it holds |
 | --- | --- | --- |
@@ -215,7 +249,9 @@ The tests are grouped by the promise they lock:
 
 ruff, mypy, and the pinned lockfile keep that contract from drifting between machines. pip-audit watches the runtime set for published vulnerabilities. It does not scan the container image. That scan is planned with the image workflow, not with this suite.
 
-While a process is running, the things to watch are the stderr line for each tool call, a rising share of `status: error`, a `cached: true` result whose `retrieved_at` is older than you expected, and `Rate limit exceeded` if a client is looping. Nothing in the current server pages a person when those happen. The log is the record.
+While a server process is running, the things to watch are the stderr line for each tool call, a rising share of `status: error`, a `cached: true` result whose `retrieved_at` is older than you expected, and `Rate limit exceeded` if a client is looping. Nothing in the current server pages a person when those happen. The log is the record.
+
+While the agent is running, the things to watch are different. `pv-agent draft` must stop with a Markdown draft and a `thread_id`, and `reports/` must still be unchanged. `pv-agent resume` is the step that writes the file. The saved file should contain the disclaimer and, if the draft was approved as written, the URLs and times from the tool results. The server log for that run is the same stderr line as any other caller: `local` on stdio, `pv-mcp-dev` on the shared HTTP token.
 
 ## 6. What this MCP server takes from the protocol
 
@@ -457,21 +493,21 @@ Over HTTP the `caller` is `pv-mcp-dev`. The line does not contain the bearer tok
 
 ## 10. The summary agent
 
-The server answers with records. The agent is a separate program that asks a chat model to call those records and write a short Markdown summary. It is installed with the optional `agent` extra, so the server image stays the read-only MCP process.
+This is the walkthrough. What the draft is allowed to claim is in [section 3](#what-the-agent-writes). How the process connects, which settings it reads, and where it stops are in [section 4](#the-summary-agent). What the tests lock, and what a person watches, are in [section 5](#5-what-is-checked-and-when).
+
+Install the extra and put a Groq key in `.env`:
 
 ```bash
 uv sync --extra agent
 ```
 
-Set `GROQ_API_KEY` in `.env`. The model defaults to `llama-3.3-70b-versatile` on Groq. `PV_AGENT_MODEL` and `PV_AGENT_MODEL_PROVIDER` change that pair. The provider is passed to LangChain's `init_chat_model`.
-
-Draft over stdio. This starts `pv-mcp` as a child process, calls tools, and stops with the draft still unsaved:
+Draft over stdio. The command starts the MCP server as a child process, calls the tools, prints the Markdown, and stops. `reports/` is still empty.
 
 ```bash
 uv run --extra agent pv-agent draft ibuprofen
 ```
 
-The command prints the Markdown and a `thread_id`. Read it. Then either keep it:
+The last line is `thread_id=...`. Read the Markdown above it. Then keep it:
 
 ```bash
 uv run --extra agent pv-agent resume THREAD_ID --approve
@@ -483,15 +519,14 @@ or replace it with a file you edited:
 uv run --extra agent pv-agent resume THREAD_ID --file summary.md
 ```
 
-The saved file is under `reports/`. If the approved text no longer contains the disclaimer, the file gains it at the end. The thread lives in `.cache/agent.sqlite`, so the second command can be a new process.
+The command prints `saved=reports/ibuprofen-YYYYMMDDTHHMMSSZ.md`. The second command can be a new shell. The thread is in `.cache/agent.sqlite`.
 
-To talk to a server that is already running, including Docker Compose:
+To use a server that is already running, including Docker Compose, point the agent at that URL and use the same `PV_MCP_TOKEN` the server was started with:
 
 ```bash
-PV_AGENT_TRANSPORT=http PV_AGENT_MCP_URL=http://127.0.0.1:8000/mcp uv run --extra agent pv-agent draft ibuprofen
+PV_AGENT_TRANSPORT=http PV_AGENT_MCP_URL=http://127.0.0.1:8000/mcp \
+  uv run --extra agent pv-agent draft ibuprofen
 ```
 
-`PV_MCP_TOKEN` is the same value the server was started with. The client sends it as a bearer token. A missing token stops the agent before it connects.
-
-The graph may call tools several times, and it stops after six rounds. It does not pause on each tool call. The only pause is the finished draft. The model is told to cite the URL and the retrieval time, to treat tool text as data, and not to invent a number. Those instructions are in the agent because the adapter does not load the methodology resource. Checking that a live model follows them is the evaluation milestone, not this one.
+A missing Groq key, a missing HTTP token, an empty drug name, or an empty edit file exits before a file is written.
 
