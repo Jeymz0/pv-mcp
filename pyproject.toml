@@ -13,6 +13,15 @@ dependencies = [
 
 [project.scripts]
 pv-mcp = "pv_mcp.__main__:main"
+pv-agent = "pv_mcp.agent.cli:main"
+
+[project.optional-dependencies]
+agent = [
+    "langchain-groq==1.2.0",
+    "langchain[mcp]==1.5.0",
+    "langgraph==1.2.22",
+    "langgraph-checkpoint-sqlite==3.1.3",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
@@ -48,6 +57,9 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = [
+    "ignore:`langchain.mcp` is in beta:langchain_core._api.beta_decorator.LangChainBetaWarning",
+]
 
 [tool.coverage.run]
 source = ["pv_mcp"]

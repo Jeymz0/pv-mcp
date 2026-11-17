@@ -15,12 +15,12 @@ serve-http:
 	uv run pv-mcp http
 
 ci:
-	uv sync --frozen
+	uv sync --frozen --extra agent
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy
 	uv run pytest --cov=pv_mcp --cov-report=term-missing
 	req=$$(mktemp); \
-	uv export --frozen --no-dev --no-emit-project --format requirements.txt -o "$$req" >/dev/null; \
+	uv export --frozen --no-dev --extra agent --no-emit-project --format requirements.txt -o "$$req" >/dev/null; \
 	uv run pip-audit --requirement "$$req" --disable-pip --progress-spinner off; \
 	status=$$?; rm -f "$$req"; exit $$status

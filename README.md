@@ -4,7 +4,7 @@ Ask what the public record says about a medicine. This MCP server goes to two fi
 
 A person can ask in ordinary language through Cursor, Claude Desktop, or MCP Inspector. A program can call the same three tools. The server does not write a medical opinion, and it does not tell a patient to start or stop a treatment.
 
-This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process.
+This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. The summary agent, which asks a chat model to call the tools and then waits for a person, is [section 10](#10-the-summary-agent).
 
 ## 1. What you can ask this MCP server
 
@@ -191,9 +191,9 @@ The suite never calls the internet. Tool contracts run through an in-memory MCP 
 | --- | --- | --- |
 | While developing | `make test` | The pytest suite, offline |
 | Before a change feels finished | `make lint` | ruff (lint and format) and mypy in strict mode on `pv_mcp` |
-| On every push and every pull request | `.github/workflows/ci.yml`, or `make ci` locally | Lockfile sync with uv 0.13.5 and Python 3.12, then ruff, mypy, pytest, and pip-audit |
+| On every push and every pull request | `.github/workflows/ci.yml`, or `make ci` locally | Lockfile sync with uv 0.13.5 and Python 3.12, including the `agent` extra, then ruff, mypy, pytest, and pip-audit |
 | Coverage gate | the pytest step in CI | Coverage of the `pv_mcp` package. The job fails below 90% |
-| Dependency watch | the last CI step | Runtime dependencies exported from the lockfile, with their hashes. pip-audit does not ask pip to resolve them again |
+| Dependency watch | the last CI step | Runtime dependencies, including the agent extra, exported from the lockfile with their hashes. pip-audit does not ask pip to resolve them again |
 | By hand, outside the suite | one live openFDA session | Not part of CI. Not a regression test |
 
 The workflow cancels a superseded run on the same ref. It has `contents: read` only.
@@ -209,6 +209,9 @@ The tests are grouped by the promise they lock:
 | `tests/test_guardrails.py` | Secret field names and long strings are redacted. The sliding window is per caller. One tool call writes one audit line, and listing tools does not. A call past the limit does not hit openFDA again |
 | `tests/test_http.py` | The HTTP process refuses to start without a token. A mismatched token is rejected. A missing or wrong bearer is HTTP 401 and does not call openFDA. Binding every interface still rejects `Host: evil.com` with HTTP 421. A valid token calls openFDA once, then the cache |
 | `tests/test_settings.py` | A blank API key, token, or cache path is ignored |
+| `tests/test_agent_graph.py` | A scripted model calls the three tools, then drafting stops for review. Approval saves the draft. An edit replaces it. The disclaimer is kept. A planted instruction arrives as tool data. The tool loop stops after six rounds. An empty draft is rejected. Groq is not called |
+| `tests/test_agent_client.py` | stdio launches the server script. HTTP attaches the bearer token. `MCPAdapter` lists the three tools over both transports and does not call openFDA |
+| `tests/test_agent_cli.py` | `pv-agent draft` prints the thread id. An empty drug exits. Resume writes the edited file. A missing Groq key is refused before a provider client is built |
 
 ruff, mypy, and the pinned lockfile keep that contract from drifting between machines. pip-audit watches the runtime set for published vulnerabilities. It does not scan the container image. That scan is planned with the image workflow, not with this suite.
 
@@ -226,7 +229,7 @@ A prompt is a template a person runs. The server stops at that template. The hos
 
 On HTTP the process is an MCP resource server: a bearer token scoped to `pv:read`, bound to this server's URL. A client that speaks the protocol needs no private library for this project. The server does not ask the host model to generate a completion on its behalf, does not solicit secrets from the user, and exposes no tool that writes.
 
-Another program can connect over stdio or over HTTP without embedding this process. The agent that will do that is milestone M4. It is not built yet. The adapter planned for that agent loads tools only, so the methodology and the prompt have to be repeated in the agent's own instructions if the agent is to follow them.
+Another program can connect over stdio or over HTTP without embedding this process. The summary agent in [section 10](#10-the-summary-agent) does that. `MCPAdapter` loads tools only, so the methodology and the disclaimer are repeated in the agent's own system prompt. The server still returns the records. The agent drafts, and a person accepts the draft.
 
 ## 7. Why the surface is this shape
 
@@ -252,11 +255,11 @@ The image holds no secrets. The token and the API key are environment variables.
 
 ## 8. Milestones, and MCP ideas beyond them
 
-M1, M2, and M3 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). From M4 onward the milestones are still planned. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
+M1 through M4 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). From M5 onward the milestones are still planned. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
 
 ### M4 — an agent that uses the tools
 
-A LangGraph agent drafts a safety-signal summary for one drug. Its tools come from `langchain.mcp.MCPAdapter` (`langchain[mcp]`), over stdio or over `http://…/mcp` with the bearer token. The adapter loads tools only. It does not see `safety_signal_summary` or `pv://faers/methodology`, so the same limits and the same disclaimer live in the agent's own system prompt. The agent plans, calls the three existing tools, and drafts Markdown that cites their URLs and retrieval times. A person then approves or edits that draft. The approved text is saved. The chat model is Groq, and the model name is configurable. The server still returns sourced records. It does not write the summary, and it does not check the draft.
+`pv-agent` drafts a safety-signal summary for one drug. Its tools come from `langchain.mcp.MCPAdapter` (`langchain[mcp]`), over stdio or over `http://…/mcp` with the bearer token. The adapter loads tools only. It does not see `safety_signal_summary` or `pv://faers/methodology`, so the same limits and the same disclaimer live in the agent's own system prompt. The graph plans, calls the three existing tools, and drafts Markdown that cites their URLs and retrieval times. A LangGraph interrupt then waits. The person approves the draft or replaces it, and the approved text is saved. The chat model is Groq by default, and the model name and provider are settings. The decision is [docs/adr/0005-agent-client.md](docs/adr/0005-agent-client.md). The server still returns sourced records. It does not write the summary, and it does not check the draft.
 
 ### M5 — evaluation of that agent
 
@@ -268,9 +271,9 @@ The workflow builds the image, scans it with Trivy, writes an SBOM, and pushes t
 
 ### M7 — the written account of the system
 
-This README is the layered account of the server, including the example session below. M7 still adds an architecture diagram, `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain), and three architecture notes: untrusted tool output, the MCPAdapter client, and the deployment cost. M7 documents the server. It does not extend it.
+This README is the layered account of the server, including the example session below, and [0005](docs/adr/0005-agent-client.md) records the agent client. M7 still adds an architecture diagram, `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain), and two architecture notes: untrusted tool output, and the deployment cost. M7 documents the server. It does not extend it.
 
-ClinicalTrials.gov is not in M4–M7. It stays out while the FAERS path is the one the agent and the evals rely on.
+ClinicalTrials.gov is not in M5–M7. It stays out while the FAERS path is the one the agent and the evals rely on.
 
 ### Later, not on this list
 
@@ -451,3 +454,44 @@ Calling `top_reactions` again with the same arguments, inside the hour, does not
 ```
 
 Over HTTP the `caller` is `pv-mcp-dev`. The line does not contain the bearer token or the openFDA key. A name such as `ibuprofen AND serious:1` is rejected before any request. A limit of 21 is rejected by the tool schema.
+
+## 10. The summary agent
+
+The server answers with records. The agent is a separate program that asks a chat model to call those records and write a short Markdown summary. It is installed with the optional `agent` extra, so the server image stays the read-only MCP process.
+
+```bash
+uv sync --extra agent
+```
+
+Set `GROQ_API_KEY` in `.env`. The model defaults to `llama-3.3-70b-versatile` on Groq. `PV_AGENT_MODEL` and `PV_AGENT_MODEL_PROVIDER` change that pair. The provider is passed to LangChain's `init_chat_model`.
+
+Draft over stdio. This starts `pv-mcp` as a child process, calls tools, and stops with the draft still unsaved:
+
+```bash
+uv run --extra agent pv-agent draft ibuprofen
+```
+
+The command prints the Markdown and a `thread_id`. Read it. Then either keep it:
+
+```bash
+uv run --extra agent pv-agent resume THREAD_ID --approve
+```
+
+or replace it with a file you edited:
+
+```bash
+uv run --extra agent pv-agent resume THREAD_ID --file summary.md
+```
+
+The saved file is under `reports/`. If the approved text no longer contains the disclaimer, the file gains it at the end. The thread lives in `.cache/agent.sqlite`, so the second command can be a new process.
+
+To talk to a server that is already running, including Docker Compose:
+
+```bash
+PV_AGENT_TRANSPORT=http PV_AGENT_MCP_URL=http://127.0.0.1:8000/mcp uv run --extra agent pv-agent draft ibuprofen
+```
+
+`PV_MCP_TOKEN` is the same value the server was started with. The client sends it as a bearer token. A missing token stops the agent before it connects.
+
+The graph may call tools several times, and it stops after six rounds. It does not pause on each tool call. The only pause is the finished draft. The model is told to cite the URL and the retrieval time, to treat tool text as data, and not to invent a number. Those instructions are in the agent because the adapter does not load the methodology resource. Checking that a live model follows them is the evaluation milestone, not this one.
+

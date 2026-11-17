@@ -26,7 +26,7 @@ jobs:
           enable-cache: true
 
       - name: Sync the lockfile
-        run: uv sync --frozen
+        run: uv sync --frozen --extra agent
 
       - name: Ruff
         run: |
@@ -42,5 +42,5 @@ jobs:
       - name: Audit runtime dependencies
         run: |
           req="${RUNNER_TEMP}/requirements.txt"
-          uv export --frozen --no-dev --no-emit-project --format requirements.txt -o "$req" >/dev/null
+          uv export --frozen --no-dev --extra agent --no-emit-project --format requirements.txt -o "$req" >/dev/null
           uv run pip-audit --requirement "$req" --disable-pip --progress-spinner off
