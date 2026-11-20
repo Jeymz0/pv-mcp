@@ -1,4 +1,4 @@
-.PHONY: test lint serve serve-http ci
+.PHONY: test lint serve serve-http ci eval
 
 test:
 	uv run pytest
@@ -13,6 +13,9 @@ serve:
 
 serve-http:
 	uv run pv-mcp http
+
+eval:
+	uv run --extra agent pv-eval
 
 ci:
 	uv sync --frozen --extra agent

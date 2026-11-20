@@ -14,6 +14,7 @@ dependencies = [
 [project.scripts]
 pv-mcp = "pv_mcp.__main__:main"
 pv-agent = "pv_mcp.agent.cli:main"
+pv-eval = "pv_mcp.eval.cli:main"
 
 [project.optional-dependencies]
 agent = [

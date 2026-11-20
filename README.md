@@ -4,7 +4,7 @@ Ask what the public record says about a medicine. This MCP server goes to two fi
 
 A person can ask in ordinary language through Cursor, Claude Desktop, or MCP Inspector. A program can call the same three tools. The server does not write a medical opinion, and it does not tell a patient to start or stop a treatment.
 
-This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent).
+This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent). An on-demand grade of that draft is in [section 11](#11-grading-the-draft).
 
 ## 1. What you can ask this MCP server
 
@@ -39,6 +39,8 @@ The same server can listen on `http://127.0.0.1:8000/mcp`. That door asks for a 
 ### Or let an agent draft, then read it
 
 `pv-agent` asks a chat model to call the three tools and write one Markdown note for one drug. It stops before anything is saved. You read the draft, keep it, or replace it with a file of your own. The note you accept is written under `reports/`. A Groq key is required for a live draft. The commands are in [section 10](#10-the-summary-agent). The tests never call Groq.
+
+Twelve recorded cases can grade a draft. They look at which tools were called, whether each number in the note appears in those tool results, whether a sentence planted in a report or a label was obeyed, and whether the disclaimer is there. That grade calls the chat model, so it runs when you ask. The command is in [section 11](#11-grading-the-draft).
 
 ### What a careful reading looks like
 
@@ -127,7 +129,7 @@ The agent is a client, not a fourth tool. It starts from that same worksheet. Th
 
 Nothing is saved at the draft step. A person approves the text, or substitutes another Markdown file. The file that is kept is `{drug}-{UTC time}.md` under `reports/`. It carries the disclaimer. If the person's edit no longer contains that sentence, the save step appends it.
 
-The agent does not compute an incidence, does not decide that a reaction is labeled, and does not check that its citations match the tool results. A person does that reading now. An evaluation suite that checks a live model is still planned.
+The agent does not compute an incidence and does not decide that a reaction is labeled. Twelve recorded cases check a live draft for the tools it called, for numbers that appear in the tool results, for a planted instruction it should have ignored, and for the disclaimer. The payloads are fixed, so the expected numbers do not move. A person still reads the draft before it is saved. What each check holds, and when the run happens, is in [section 5](#5-what-is-checked-and-when).
 
 ### What this MCP server will not answer
 
@@ -185,6 +187,14 @@ The chat model is built with `init_chat_model`. `PV_AGENT_MODEL` and `PV_AGENT_M
 
 The graph may call tools in a loop, then it drafts once. Six tool-calling rounds is the cap. Tool calls are not paused one by one. The only interrupt is the finished Markdown. `pv-agent draft` prints that Markdown and a `thread_id`, and writes nothing under `reports/`. `pv-agent resume THREAD --approve` saves the draft. `pv-agent resume THREAD --file summary.md` saves that file instead. An empty drug name or an empty edit file exits. The thread is stored in `.cache/agent.sqlite`, so the second command can be a new process.
 
+### The evaluation run
+
+`pv-eval` runs that same graph on twelve recorded tool payloads. It does not start the MCP server and it does not call openFDA. The chat model is the one named by `PV_AGENT_MODEL` and `PV_AGENT_MODEL_PROVIDER`. When the provider is Groq, an empty `GROQ_API_KEY` stops the process before a case starts.
+
+Each model reply is stored in `.cache/eval-responses.json`. The key is a hash of the model name and the messages, so a second run of the same case does not call Groq again. `--cache` chooses another file. The draft is scored at the interrupt, before the save step would append the disclaimer. A model that left the disclaimer out fails, even though a later save would have added it.
+
+`pv-eval` writes `reports/eval.md` (`--output` chooses another path) and exits non-zero when any case fails. The decision is [docs/adr/0003-untrusted-tool-output.md](docs/adr/0003-untrusted-tool-output.md). GitHub Actions runs the same command when someone starts `.github/workflows/eval.yml` by hand. The key is the repository secret `GROQ_API_KEY`. The report is uploaded as an artifact. The push workflow stays on the offline suite.
+
 ### Settings
 
 | Variable | Default | Role |
@@ -219,7 +229,7 @@ A blank string for the key, the token, the cache path, or the resource URL is tr
 
 ## 5. What is checked, and when
 
-The suite never calls openFDA and never calls Groq. Tool contracts run through an in-memory MCP client against recorded HTTP responses. The agent tests use a scripted chat model. They also list the three tools through `MCPAdapter`, over stdio and over a local HTTP port. A live openFDA call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it. A live Groq draft is not part of CI. Continuous integration does not call openFDA.
+The pytest suite never calls openFDA and never calls Groq. Tool contracts run through an in-memory MCP client against recorded HTTP responses. The agent tests use a scripted chat model. They also list the three tools through `MCPAdapter`, over stdio and over a local HTTP port. The evaluation tests use the same kind of scripted model against recorded tool payloads, and they check that a second run reads the reply cache instead of calling the model again. A live openFDA call was made by hand, once, to watch the cache hit the real API. The suite does not repeat it. A live Groq draft is `pv-eval`, and it is not part of CI. Continuous integration does not call openFDA and does not call Groq.
 
 | When | Command | What it holds |
 | --- | --- | --- |
@@ -228,6 +238,8 @@ The suite never calls openFDA and never calls Groq. Tool contracts run through a
 | On every push and every pull request | `.github/workflows/ci.yml`, or `make ci` locally | Lockfile sync with uv 0.13.5 and Python 3.12, including the `agent` extra, then ruff, mypy, pytest, and pip-audit |
 | Coverage gate | the pytest step in CI | Coverage of the `pv_mcp` package. The job fails below 90% |
 | Dependency watch | the last CI step | Runtime dependencies, including the agent extra, exported from the lockfile with their hashes. pip-audit does not ask pip to resolve them again |
+| On demand | `make eval`, or `uv run --extra agent pv-eval` | Twelve golden cases against the configured chat model. Recorded tool payloads. Cached replies. A Markdown report. Exit non-zero if a case fails |
+| On demand, in GitHub | `.github/workflows/eval.yml`, started by hand | The same command. `GROQ_API_KEY` is a repository secret. The report is kept as an artifact |
 | By hand, outside the suite | one live openFDA session | Not part of CI. Not a regression test |
 
 The workflow cancels a superseded run on the same ref. It has `contents: read` only.
@@ -246,12 +258,15 @@ The tests are grouped by the promise they lock:
 | `tests/test_agent_graph.py` | A scripted model calls the three tools, then drafting stops for review. Approval saves the draft. An edit replaces it. The disclaimer is kept. A planted instruction arrives as tool data. The tool loop stops after six rounds. An empty draft is rejected. Groq is not called |
 | `tests/test_agent_client.py` | stdio launches the server script. HTTP attaches the bearer token. `MCPAdapter` lists the three tools over both transports and does not call openFDA |
 | `tests/test_agent_cli.py` | `pv-agent draft` prints the thread id. An empty drug exits. Resume writes the edited file. A missing Groq key is refused before a provider client is built |
+| `tests/test_eval.py` | Twelve cases, each check failing and passing, a scripted run through the real graph, the reply cache, the report, and a missing Groq key. Groq is not called |
 
 ruff, mypy, and the pinned lockfile keep that contract from drifting between machines. pip-audit watches the runtime set for published vulnerabilities. It does not scan the container image. That scan is planned with the image workflow, not with this suite.
 
 While a server process is running, the things to watch are the stderr line for each tool call, a rising share of `status: error`, a `cached: true` result whose `retrieved_at` is older than you expected, and `Rate limit exceeded` if a client is looping. Nothing in the current server pages a person when those happen. The log is the record.
 
 While the agent is running, the things to watch are different. `pv-agent draft` must stop with a Markdown draft and a `thread_id`, and `reports/` must still be unchanged. `pv-agent resume` is the step that writes the file. The saved file should contain the disclaimer and, if the draft was approved as written, the URLs and times from the tool results. The server log for that run is the same stderr line as any other caller: `local` on stdio, `pv-mcp-dev` on the shared HTTP token.
+
+`pv-eval` is the check that a live model still does that. Read `reports/eval.md` for the pass count and, on a failure, which check broke and the draft that was scored. A second run of a case already in `.cache/eval-responses.json` reuses that reply. A green report means the draft matched the recorded payloads. The offline suite is what locks the live tools.
 
 ## 6. What this MCP server takes from the protocol
 
@@ -267,9 +282,11 @@ On HTTP the process is an MCP resource server: a bearer token scoped to `pv:read
 
 Another program can connect over stdio or over HTTP without embedding this process. The summary agent in [section 10](#10-the-summary-agent) does that. `MCPAdapter` loads tools only, so the methodology and the disclaimer are repeated in the agent's own system prompt. The server still returns the records. The agent drafts, and a person accepts the draft.
 
+The grade in [section 11](#11-grading-the-draft) is not a new protocol feature. It runs the same graph with recorded tool results standing in for the server, so a live model can be checked without changing what the server returns.
+
 ## 7. Why the surface is this shape
 
-The choices below are the ones already implemented. The behavior is the one in the sections above. The notes in `docs/adr/` record the transport, the authentication, and the cache.
+The choices below are the ones already implemented. The behavior is the one in the sections above. The notes in `docs/adr/` record the transport, the authentication, the cache, the agent client, and how a draft is judged when tool output is untrusted.
 
 The server reads two endpoints because those are the public files a safety question starts from. Adding a third source before this path is solid would blur what a citation points at.
 
@@ -289,9 +306,11 @@ The upstream call is allowed to fail in the open. Three attempts, then a tool er
 
 The image holds no secrets. The token and the API key are environment variables. The SQLite file lives on a volume.
 
+The evaluation uses recorded payloads so a count cannot change between runs, and so the grade does not spend the openFDA quota. It scores the draft at the interrupt, because the save step appends the disclaimer and would hide a model that left it out. An integer in the draft has to appear in those payloads. A phrase planted in a report or a label has to stay out of the draft. The run is on demand so the Groq quota is not spent on every push. The decision is [docs/adr/0003-untrusted-tool-output.md](docs/adr/0003-untrusted-tool-output.md).
+
 ## 8. Milestones, and MCP ideas beyond them
 
-M1 through M4 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). From M5 onward the milestones are still planned. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
+M1 through M5 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). M5 is the on-demand grade of that agent in [section 11](#11-grading-the-draft). From M6 onward the milestones are still planned. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
 
 ### M4 — an agent that uses the tools
 
@@ -299,7 +318,7 @@ M1 through M4 are in the repository. M1 and M2 are the server this document desc
 
 ### M5 — evaluation of that agent
 
-Ten to fifteen golden cases, run on demand because the Groq quota is limited. They check tool choice, numbers that appear in the tool outputs, refusal to follow instructions planted in a label or a report, and the presence of the disclaimer. LLM responses are cached. The run writes a Markdown report. A workflow dispatch holds the API key. This does not change the protocol surface.
+`pv-eval` grades the draft on twelve golden cases. A case passes when the three tools were called for that drug, the worksheet label sections were requested, the recorded facts appear, every integer in the draft is in the recorded tool results, a planted instruction is not followed, and the standard disclaimer is in the draft the model wrote. The payloads are recorded, so openFDA is not called. Model replies are cached. The command writes a Markdown report and exits non-zero when a case fails. `.github/workflows/eval.yml` runs it when someone starts the workflow, and uploads the report. The Groq key is a repository secret. This does not change the protocol surface. The decision is [docs/adr/0003-untrusted-tool-output.md](docs/adr/0003-untrusted-tool-output.md).
 
 ### M6 — image, scan, and a deploy workflow
 
@@ -307,9 +326,9 @@ The workflow builds the image, scans it with Trivy, writes an SBOM, and pushes t
 
 ### M7 — the written account of the system
 
-This README is the layered account of the server, including the example session below, and [0005](docs/adr/0005-agent-client.md) records the agent client. M7 still adds an architecture diagram, `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain), and two architecture notes: untrusted tool output, and the deployment cost. M7 documents the server. It does not extend it.
+This README is the layered account of the server, including the example session below. [0005](docs/adr/0005-agent-client.md) records the agent client, and [0003](docs/adr/0003-untrusted-tool-output.md) records how a draft is judged when tool output is untrusted. M7 still adds an architecture diagram, `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain), and the deployment-cost note. M7 documents the server. It does not extend it.
 
-ClinicalTrials.gov is not in M5–M7. It stays out while the FAERS path is the one the agent and the evals rely on.
+ClinicalTrials.gov is not in M6 or M7. It stays out while the FAERS path is the one the agent and the evaluation rely on.
 
 ### Later, not on this list
 
@@ -529,4 +548,21 @@ PV_AGENT_TRANSPORT=http PV_AGENT_MCP_URL=http://127.0.0.1:8000/mcp \
 ```
 
 A missing Groq key, a missing HTTP token, an empty drug name, or an empty edit file exits before a file is written.
+
+## 11. Grading the draft
+
+This is the walkthrough. What the grade is allowed to decide is in [what the agent writes](#what-the-agent-writes). How the cache, the exit code, and the workflow are wired is in [the evaluation run](#the-evaluation-run). What the offline tests lock, and what a person reads in the report, are in [section 5](#5-what-is-checked-and-when).
+
+The extra and the Groq key are the same ones the agent uses:
+
+```bash
+uv sync --extra agent
+uv run --extra agent pv-eval
+```
+
+The command prints `passed=… failed=…` and `report=reports/eval.md`. Each row is one drug situation: the tools, the facts that had to appear, the numbers, the disclaimer, and whether a planted sentence leaked. A failed row is copied under the table with the draft that was scored. The process exits non-zero when any case fails.
+
+A second run with the same model reads `.cache/eval-responses.json` and does not call Groq for a reply it has already stored. `--output` and `--cache` choose other paths. The command does not call openFDA, and it does not write a per-drug note under `reports/`.
+
+`make ci` does not run this. In GitHub, start the `eval` workflow by hand. The repository secret is `GROQ_API_KEY`. The Markdown report is kept as an artifact named `eval-report`.
 
