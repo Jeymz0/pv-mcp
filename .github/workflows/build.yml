@@ -95,12 +95,17 @@ jobs:
 
       - name: Mark the package public
         if: github.ref == 'refs/heads/main'
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           package=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]' | cut -d/ -f2)
-          gh api --method PUT -H "Accept: application/vnd.github+json" \
-            "/user/packages/container/${package}/visibility" \
-            -f visibility=public
-          echo "Asked GitHub to mark the ${package} package public."
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          if gh api --method PUT -H "Accept: application/vnd.github+json" \
+            "/users/${owner}/packages/container/${package}/visibility" \
+            -f visibility=public; then
+            echo "The package is public."
+          else
+            echo "GitHub did not change the package visibility from this workflow."
+            echo "Set ghcr.io/${owner,,}/${package} to public in the package settings."
+            echo "A private package cannot be pulled by Azure without a registry password, and this template does not store one."
+          fi

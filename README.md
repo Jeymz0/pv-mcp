@@ -183,7 +183,7 @@ Docker Compose runs the HTTP server as a non-root user, uid 10001. The token and
 
 ### The published image
 
-`.github/workflows/build.yml` runs on a push to `main`, and when someone starts it by hand. It builds `linux/amd64`, writes a CycloneDX SBOM, and scans the image with Trivy. A fixed HIGH or CRITICAL finding fails the job. The image is pushed only after that scan, to `ghcr.io/<owner>/<repository>`, tagged with the commit SHA. On `main` it is also tagged `main`. The SBOM and the scan table are the artifact `image-reports`. The workflow then asks GitHub to mark the package public, so Azure can pull it without a registry password. If that request is refused, the package page is where the visibility is set.
+`.github/workflows/build.yml` runs on a push to `main`, and when someone starts it by hand. It builds `linux/amd64`, writes a CycloneDX SBOM, and scans the image with Trivy. A fixed HIGH or CRITICAL finding fails the job. The image is pushed only after that scan, to `ghcr.io/<owner>/<repository>`, tagged with the commit SHA. On `main` it is also tagged `main`. The SBOM and the scan table are the artifact `image-reports`. The workflow then asks GitHub to mark the package public, so Azure can pull it without a registry password. When GitHub refuses that request, the package page is where the visibility is set, once.
 
 The image carries no token and no API key. The build applies the Debian security updates that the base tag has not picked up yet, then the scan runs. `org.opencontainers.image.source` points at this repository. The decision is [docs/adr/0006-deployment-target-and-cost.md](docs/adr/0006-deployment-target-and-cost.md).
 
