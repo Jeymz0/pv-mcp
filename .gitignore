@@ -10,6 +10,8 @@ reports/
 .coverage.*
 htmlcov/
 coverage.xml
+sbom.cdx.json
+scan.txt
 *.py[cod]
 dist/
 *.egg-info/

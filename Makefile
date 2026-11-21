@@ -1,4 +1,4 @@
-.PHONY: test lint serve serve-http ci eval
+.PHONY: test lint serve serve-http ci eval image teardown
 
 test:
 	uv run pytest
@@ -16,6 +16,12 @@ serve-http:
 
 eval:
 	uv run --extra agent pv-eval
+
+image:
+	docker build -t pv-mcp:local .
+
+teardown:
+	./infra/teardown.sh
 
 ci:
 	uv sync --frozen --extra agent

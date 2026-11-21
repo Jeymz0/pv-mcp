@@ -4,7 +4,7 @@ Ask what the public record says about a medicine. This MCP server goes to two fi
 
 A person can ask in ordinary language through Cursor, Claude Desktop, or MCP Inspector. A program can call the same three tools. The server does not write a medical opinion, and it does not tell a patient to start or stop a treatment.
 
-This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent). An on-demand grade of that draft is in [section 11](#11-grading-the-draft).
+This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent). An on-demand grade of that draft is in [section 11](#11-grading-the-draft). Publishing the image, and starting a copy that scales to zero, are in [section 12](#12-publishing-and-deploying-this-mcp-server).
 
 ## 1. What you can ask this MCP server
 
@@ -35,6 +35,8 @@ uv run pv-mcp
 Point the desktop client at that command. Ask what the public reports and the label say about a drug. The host lists the tools and calls the ones it needs. To follow the worksheet instead, run the prompt `safety_signal_summary` and pass the drug name.
 
 The same server can listen on `http://127.0.0.1:8000/mcp`. That door asks for a bearer token. The commands, the HTTP check, and a full example with the fields filled in are in [a worked session](#9-a-worked-session-with-this-mcp-server) at the end.
+
+A push to the main branch builds that HTTP server as an image, scans it, and publishes it. Starting the image in Azure is a separate step, done by hand. While nobody is calling, that copy scales down to zero replicas. The commands are in [section 12](#12-publishing-and-deploying-this-mcp-server).
 
 ### Or let an agent draft, then read it
 
@@ -135,6 +137,8 @@ The agent does not compute an incidence and does not decide that a reaction is l
 
 It will not compute an incidence, a disproportionality score, or a comparison of two drugs. It will not join a MedDRA term to the label and decide whether the reaction is "labeled." It will not pick among several matching products. The label tool takes the newest match. It will not advise a patient.
 
+A copy published to Azure answers those same three questions. It does not keep a database of patients. The cache file lives on the replica and disappears when the replica scales to zero.
+
 ## 4. How this MCP server behaves
 
 The same process serves both doors. `pv-mcp` and `pv-mcp stdio` speak MCP on stdin and stdout, for a local client. `pv-mcp http`, or `PV_MCP_TRANSPORT=http`, serves Streamable HTTP on `/mcp`. The deprecated SSE transport is unused. The transport is chosen when the process starts. Both modes share one server object, the same tools, the same resource, and the same prompt.
@@ -175,7 +179,21 @@ There is no metrics endpoint and no dashboard. The surveillance of a running pro
 
 ### The container
 
-Docker Compose runs the HTTP server as a non-root user. The token and the API key come from the environment or a gitignored `.env`. The cache file sits on the volume `pv-mcp-cache`. The image does not install the agent extra. The agent runs beside the container and connects to `http://127.0.0.1:8000/mcp`. Image scanning, the SBOM, and a cloud deployment are later work. They are not in this image's workflow yet.
+Docker Compose runs the HTTP server as a non-root user, uid 10001. The token and the API key come from the environment or a gitignored `.env`. The cache file sits on the volume `pv-mcp-cache`. The image does not install the agent extra. The agent runs beside the container and connects to `http://127.0.0.1:8000/mcp`.
+
+### The published image
+
+`.github/workflows/build.yml` runs on a push to `main`, and when someone starts it by hand. It builds `linux/amd64`, writes a CycloneDX SBOM, and scans the image with Trivy. A fixed HIGH or CRITICAL finding fails the job. The image is pushed only after that scan, to `ghcr.io/<owner>/<repository>`, tagged with the commit SHA. On `main` it is also tagged `main`. The SBOM and the scan table are the artifact `image-reports`. The workflow then asks GitHub to mark the package public, so Azure can pull it without a registry password. If that request is refused, the package page is where the visibility is set.
+
+The image carries no token and no API key. `org.opencontainers.image.source` points at this repository. The decision is [docs/adr/0006-deployment-target-and-cost.md](docs/adr/0006-deployment-target-and-cost.md).
+
+### A copy that scales to zero
+
+`.github/workflows/deploy.yml` runs only when someone starts it. The choice is `deploy` or `teardown`. GitHub signs in to Azure with OIDC. The federated credential subject is `repo:<owner>/<name>:ref:refs/heads/main`, and the audience is `api://AzureADTokenExchange`. `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` are repository variables. There is no Azure client secret. The app registration needs Contributor, so the workflow can create and delete the resource group, and Cost Management Contributor, so it can write the budget.
+
+`infra/main.bicep` creates one Container Apps environment and one app in West Europe. The app has a minimum of 0 replicas and a maximum of 1. The public URL is `https://<fqdn>/mcp`, and `PV_MCP_RESOURCE_URL` is set to that URL so the Host check and the dev token audience match it. `PV_MCP_TOKEN` comes from the repository secret of the same name. An empty `OPENFDA_API_KEY` leaves the anonymous quota. The idle timeout is 30 minutes. The cache stays on the replica's disk. There is no Log Analytics workspace and no managed disk. A monthly budget on the resource group mails `BUDGET_CONTACT` at half the amount and at the full amount. The default amount is 5, in the subscription's billing currency. The mail does not stop the app.
+
+`infra/teardown.sh` deletes the resource group. `make teardown` runs it for `rg-pv-mcp`. The Entra ID verifier from the authentication decision is not part of this deployment.
 
 ### The summary agent
 
@@ -236,10 +254,12 @@ The pytest suite never calls openFDA and never calls Groq. Tool contracts run th
 | While developing | `make test` | The pytest suite, offline |
 | Before a change feels finished | `make lint` | ruff (lint and format) and mypy in strict mode on `pv_mcp` |
 | On every push and every pull request | `.github/workflows/ci.yml`, or `make ci` locally | Lockfile sync with uv 0.13.5 and Python 3.12, including the `agent` extra, then ruff, mypy, pytest, and pip-audit |
+| On every push to main | `.github/workflows/build.yml` | Build the linux/amd64 image, write a CycloneDX SBOM, fail on a fixed HIGH or CRITICAL finding, then push that scanned image to GHCR |
 | Coverage gate | the pytest step in CI | Coverage of the `pv_mcp` package. The job fails below 90% |
 | Dependency watch | the last CI step | Runtime dependencies, including the agent extra, exported from the lockfile with their hashes. pip-audit does not ask pip to resolve them again |
 | On demand | `make eval`, or `uv run --extra agent pv-eval` | Twelve golden cases against the configured chat model. Recorded tool payloads. Cached replies. A Markdown report. Exit non-zero if a case fails |
 | On demand, in GitHub | `.github/workflows/eval.yml`, started by hand | The same command. `GROQ_API_KEY` is a repository secret. The report is kept as an artifact |
+| On demand, in GitHub | `.github/workflows/deploy.yml`, started by hand | Bicep deployment to Azure Container Apps, or deletion of the resource group. OIDC. Minimum 0 replicas. Budget mail |
 | By hand, outside the suite | one live openFDA session | Not part of CI. Not a regression test |
 
 The workflow cancels a superseded run on the same ref. It has `contents: read` only.
@@ -259,14 +279,17 @@ The tests are grouped by the promise they lock:
 | `tests/test_agent_client.py` | stdio launches the server script. HTTP attaches the bearer token. `MCPAdapter` lists the three tools over both transports and does not call openFDA |
 | `tests/test_agent_cli.py` | `pv-agent draft` prints the thread id. An empty drug exits. Resume writes the edited file. A missing Groq key is refused before a provider client is built |
 | `tests/test_eval.py` | Twelve cases, each check failing and passing, a scripted run through the real graph, the reply cache, the report, and a missing Groq key. Groq is not called |
+| `tests/test_release.py` | The image workflow scans before it pushes, the deploy workflow is manual and uses OIDC, the template scales to zero and budgets the group, and the image stays a non-root server without the agent extra |
 
-ruff, mypy, and the pinned lockfile keep that contract from drifting between machines. pip-audit watches the runtime set for published vulnerabilities. It does not scan the container image. That scan is planned with the image workflow, not with this suite.
+ruff, mypy, and the pinned lockfile keep that contract from drifting between machines. pip-audit watches the runtime set for published vulnerabilities. Trivy watches the image, in the build workflow, and the SBOM from that run is the artifact to keep.
 
 While a server process is running, the things to watch are the stderr line for each tool call, a rising share of `status: error`, a `cached: true` result whose `retrieved_at` is older than you expected, and `Rate limit exceeded` if a client is looping. Nothing in the current server pages a person when those happen. The log is the record.
 
 While the agent is running, the things to watch are different. `pv-agent draft` must stop with a Markdown draft and a `thread_id`, and `reports/` must still be unchanged. `pv-agent resume` is the step that writes the file. The saved file should contain the disclaimer and, if the draft was approved as written, the URLs and times from the tool results. The server log for that run is the same stderr line as any other caller: `local` on stdio, `pv-mcp-dev` on the shared HTTP token.
 
 `pv-eval` is the check that a live model still does that. Read `reports/eval.md` for the pass count and, on a failure, which check broke and the draft that was scored. A second run of a case already in `.cache/eval-responses.json` reuses that reply. A green report means the draft matched the recorded payloads. The offline suite is what locks the live tools.
+
+After a push to main, the things to watch on the image are the Trivy table in the `image-reports` artifact and whether `ghcr.io/<owner>/<repository>:main` moved. After a deploy, the things to watch are the public URL printed by the deployment, a replica count of zero while the app is idle, and the budget mail if the month crosses half the amount or the full amount. The stderr line is still the audit record. It lives only as long as the replica does.
 
 ## 6. What this MCP server takes from the protocol
 
@@ -283,6 +306,8 @@ On HTTP the process is an MCP resource server: a bearer token scoped to `pv:read
 Another program can connect over stdio or over HTTP without embedding this process. The summary agent in [section 10](#10-the-summary-agent) does that. `MCPAdapter` loads tools only, so the methodology and the disclaimer are repeated in the agent's own system prompt. The server still returns the records. The agent drafts, and a person accepts the draft.
 
 The grade in [section 11](#11-grading-the-draft) is not a new protocol feature. It runs the same graph with recorded tool results standing in for the server, so a live model can be checked without changing what the server returns.
+
+Publishing the image and running it in Azure does not add a tool, a resource, or a prompt. The remote process is the same HTTP server.
 
 ## 7. Why the surface is this shape
 
@@ -304,13 +329,13 @@ Every tool call is counted, then limited. The log exists so a later reader can s
 
 The upstream call is allowed to fail in the open. Three attempts, then a tool error, then no cache. A dead minute stays a dead minute.
 
-The image holds no secrets. The token and the API key are environment variables. The SQLite file lives on a volume.
+The image holds no secrets. The token and the API key are environment variables. Locally the SQLite file lives on a volume. In Azure the file lives on the replica, and scale-to-zero is chosen so an idle month stays near the budget. A managed disk and a log workspace would be standing costs, so they are left out. The scan runs before the push. A fixed high-severity finding stops the push. The decision is [docs/adr/0006-deployment-target-and-cost.md](docs/adr/0006-deployment-target-and-cost.md).
 
 The evaluation uses recorded payloads so a count cannot change between runs, and so the grade does not spend the openFDA quota. It scores the draft at the interrupt, because the save step appends the disclaimer and would hide a model that left it out. An integer in the draft has to appear in those payloads. A phrase planted in a report or a label has to stay out of the draft. The run is on demand so the Groq quota is not spent on every push. The decision is [docs/adr/0003-untrusted-tool-output.md](docs/adr/0003-untrusted-tool-output.md).
 
 ## 8. Milestones, and MCP ideas beyond them
 
-M1 through M5 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). M5 is the on-demand grade of that agent in [section 11](#11-grading-the-draft). From M6 onward the milestones are still planned. None of them adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
+M1 through M6 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). M5 is the on-demand grade of that agent in [section 11](#11-grading-the-draft). M6 is the image, the scan, and the manual Azure deployment in [section 12](#12-publishing-and-deploying-this-mcp-server). M7 is still planned. None of these milestones adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
 
 ### M4 — an agent that uses the tools
 
@@ -322,13 +347,13 @@ M1 through M5 are in the repository. M1 and M2 are the server this document desc
 
 ### M6 — image, scan, and a deploy workflow
 
-The workflow builds the image, scans it with Trivy, writes an SBOM, and pushes to GHCR. A separate, manually triggered workflow deploys with Bicep to Azure Container Apps at zero minimum replicas, using GitHub OIDC rather than a long-lived Azure secret, with a budget alert and a teardown command. The production Entra ID verifier described in the authentication decision is not part of this milestone.
+`.github/workflows/build.yml` builds the image, writes a CycloneDX SBOM, scans it with Trivy, and pushes the scanned image to GHCR. `.github/workflows/deploy.yml` is started by hand. It deploys `infra/main.bicep` to Azure Container Apps with a minimum of zero replicas, signs in with GitHub OIDC, creates a monthly budget alert, and can delete the resource group. The production Entra ID verifier described in the authentication decision is not part of this milestone. The decision is [docs/adr/0006-deployment-target-and-cost.md](docs/adr/0006-deployment-target-and-cost.md).
 
 ### M7 — the written account of the system
 
-This README is the layered account of the server, including the example session below. [0005](docs/adr/0005-agent-client.md) records the agent client, and [0003](docs/adr/0003-untrusted-tool-output.md) records how a draft is judged when tool output is untrusted. M7 still adds an architecture diagram, `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain), and the deployment-cost note. M7 documents the server. It does not extend it.
+This README is the layered account of the server, including the example session below. [0005](docs/adr/0005-agent-client.md) records the agent client, [0003](docs/adr/0003-untrusted-tool-output.md) records how a draft is judged when tool output is untrusted, and [0006](docs/adr/0006-deployment-target-and-cost.md) records the deployment and its cost. M7 still adds an architecture diagram and `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain). M7 documents the server. It does not extend it.
 
-ClinicalTrials.gov is not in M6 or M7. It stays out while the FAERS path is the one the agent and the evaluation rely on.
+ClinicalTrials.gov is not in M7. It stays out while the FAERS path is the one the agent and the evaluation rely on.
 
 ### Later, not on this list
 
@@ -565,4 +590,34 @@ The command prints `passed=… failed=…` and `report=reports/eval.md`. Each ro
 A second run with the same model reads `.cache/eval-responses.json` and does not call Groq for a reply it has already stored. `--output` and `--cache` choose other paths. The command does not call openFDA, and it does not write a per-drug note under `reports/`.
 
 `make ci` does not run this. In GitHub, start the `eval` workflow by hand. The repository secret is `GROQ_API_KEY`. The Markdown report is kept as an artifact named `eval-report`.
+
+## 12. Publishing and deploying this MCP server
+
+This is the walkthrough. What a remote copy still answers is in [what this MCP server will not answer](#what-this-mcp-server-will-not-answer). How the image, the scan, the budget, and the sign-in are wired is in [the published image](#the-published-image) and [a copy that scales to zero](#a-copy-that-scales-to-zero). What to read after a run is in [section 5](#5-what-is-checked-and-when).
+
+Build the image locally:
+
+```bash
+make image
+```
+
+That tag is `pv-mcp:local`. Compose builds the same Dockerfile and serves `http://127.0.0.1:8000/mcp`.
+
+A push to `main` runs the build workflow. The artifact `image-reports` holds `sbom.cdx.json` and the Trivy table. The image is `ghcr.io/<owner>/<repository>:<commit>` and, from `main`, `:main`.
+
+Before the first deploy, create an Entra app registration and do not create a client secret. Add a federated credential:
+
+- Issuer: `https://token.actions.githubusercontent.com`
+- Subject: `repo:<owner>/<name>:ref:refs/heads/main`
+- Audience: `api://AzureADTokenExchange`
+
+Grant that app Contributor and Cost Management Contributor on the subscription. In the GitHub repository, add variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, and `BUDGET_CONTACT`. Add the secret `PV_MCP_TOKEN`. Then start the `deploy` workflow and leave the action on `deploy`. The log prints `url`, the public `https://<fqdn>/mcp`. A client sends the same bearer token.
+
+To remove the copy, start the `deploy` workflow and choose `teardown`, or, from a machine already signed in to Azure:
+
+```bash
+make teardown
+```
+
+That deletes the resource group `rg-pv-mcp`. `./infra/teardown.sh other-group` deletes another name. The dev token check is unchanged. Entra is not the verifier for this copy.
 

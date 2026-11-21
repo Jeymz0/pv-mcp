@@ -1,0 +1,149 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Deploy the image, or delete the resource group.
+        type: choice
+        options:
+          - deploy
+          - teardown
+        default: deploy
+      image:
+        description: Image to run. Empty uses ghcr.io/<repository>:main.
+        type: string
+        required: false
+        default: ""
+      location:
+        description: Azure region.
+        type: string
+        required: false
+        default: westeurope
+      resource_group:
+        description: Resource group name.
+        type: string
+        required: false
+        default: rg-pv-mcp
+      budget_amount:
+        description: Monthly budget in the subscription billing currency.
+        type: string
+        required: false
+        default: "5"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require the Azure identifiers
+        env:
+          CLIENT: ${{ vars.AZURE_CLIENT_ID }}
+          TENANT: ${{ vars.AZURE_TENANT_ID }}
+          SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          missing=()
+          [ -z "$CLIENT" ] && missing+=("AZURE_CLIENT_ID")
+          [ -z "$TENANT" ] && missing+=("AZURE_TENANT_ID")
+          [ -z "$SUB" ] && missing+=("AZURE_SUBSCRIPTION_ID")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing GitHub variables: ${missing[*]}"
+            echo "These are identifiers for the federated credential. There is no Azure client secret."
+            exit 1
+          fi
+
+      - name: Log in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Image reference
+        id: image
+        env:
+          REQUESTED: ${{ inputs.image }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            ref="$REQUESTED"
+          else
+            repo=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+            ref="ghcr.io/${repo}:main"
+          fi
+          case "$ref" in
+            *" "*|*"$"*)
+              echo "Image reference is not usable."
+              exit 1
+              ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        if: inputs.action == 'deploy'
+        env:
+          LOCATION: ${{ inputs.location }}
+          GROUP: ${{ inputs.resource_group }}
+          IMAGE: ${{ steps.image.outputs.ref }}
+          TOKEN: ${{ secrets.PV_MCP_TOKEN }}
+          OPENFDA: ${{ secrets.OPENFDA_API_KEY }}
+          CONTACT: ${{ vars.BUDGET_CONTACT }}
+          BUDGET_AMOUNT: ${{ inputs.budget_amount }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "PV_MCP_TOKEN is not set. Add it as a repository secret. The HTTP server refuses to start without it."
+            exit 1
+          fi
+          if [ -z "$CONTACT" ]; then
+            echo "BUDGET_CONTACT is not set. Add it as a repository variable, the address that receives the budget mail."
+            exit 1
+          fi
+          if ! [[ "$GROUP" =~ ^[A-Za-z0-9._()-]{1,90}$ ]]; then
+            echo "Resource group name is not usable."
+            exit 1
+          fi
+          if ! [[ "$LOCATION" =~ ^[a-z0-9]+$ ]]; then
+            echo "Location is not usable."
+            exit 1
+          fi
+          if ! [[ "$BUDGET_AMOUNT" =~ ^[0-9]+$ ]]; then
+            echo "Budget amount must be a whole number."
+            exit 1
+          fi
+          start=$(date -u +%Y-%m-01)
+          jq -n \
+            --arg location "$LOCATION" \
+            --arg image "$IMAGE" \
+            --arg token "$TOKEN" \
+            --arg api "${OPENFDA:-}" \
+            --argjson amount "$BUDGET_AMOUNT" \
+            --arg contact "$CONTACT" \
+            --arg start "$start" \
+            '{
+              location: {value: $location},
+              image: {value: $image},
+              pvMcpToken: {value: $token},
+              openfdaApiKey: {value: $api},
+              budgetAmount: {value: $amount},
+              budgetContact: {value: $contact},
+              budgetStart: {value: $start}
+            }' > "$RUNNER_TEMP/params.json"
+          az group create --name "$GROUP" --location "$LOCATION"
+          az deployment group create \
+            --resource-group "$GROUP" \
+            --template-file infra/main.bicep \
+            --parameters "@$RUNNER_TEMP/params.json" \
+            --query properties.outputs \
+            --output json
+          rm -f "$RUNNER_TEMP/params.json"
+
+      - name: Teardown
+        if: inputs.action == 'teardown'
+        env:
+          GROUP: ${{ inputs.resource_group }}
+        run: ./infra/teardown.sh "$GROUP"

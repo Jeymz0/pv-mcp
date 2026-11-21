@@ -10,6 +10,10 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 FROM base AS runtime
+ARG SOURCE_URL=https://github.com/Jeymz0/pv-mcp
+LABEL org.opencontainers.image.source=$SOURCE_URL \
+    org.opencontainers.image.title=pv-mcp \
+    org.opencontainers.image.description="Read-only MCP server for public pharmacovigilance data from openFDA."
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin pv \
     && mkdir -p /data \
     && chown pv:pv /data
