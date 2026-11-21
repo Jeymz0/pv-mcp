@@ -55,6 +55,7 @@ def test_the_image_stays_a_non_root_server() -> None:
     text = _text("Dockerfile")
     assert "useradd --uid 10001" in text
     assert "uv sync --frozen --no-dev --no-editable" in text
+    assert "apt-get upgrade" in text
     assert "--extra agent" not in text
     assert "org.opencontainers.image.source" in text
     assert "USER pv" in text

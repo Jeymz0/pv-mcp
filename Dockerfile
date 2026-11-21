@@ -14,6 +14,10 @@ ARG SOURCE_URL=https://github.com/Jeymz0/pv-mcp
 LABEL org.opencontainers.image.source=$SOURCE_URL \
     org.opencontainers.image.title=pv-mcp \
     org.opencontainers.image.description="Read-only MCP server for public pharmacovigilance data from openFDA."
+# The base tag can lag a Debian security update. Apply fixed packages before the scan.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin pv \
     && mkdir -p /data \
     && chown pv:pv /data
