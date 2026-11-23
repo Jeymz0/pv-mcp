@@ -4,7 +4,7 @@ Ask what the public record says about a medicine. This MCP server goes to two fi
 
 A person can ask in ordinary language through Cursor, Claude Desktop, or MCP Inspector. A program can call the same three tools. The server does not write a medical opinion, and it does not tell a patient to start or stop a treatment.
 
-This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent). An on-demand grade of that draft is in [section 11](#11-grading-the-draft). Publishing the image, and starting a copy that scales to zero, are in [section 12](#12-publishing-and-deploying-this-mcp-server).
+This document is written in layers. The first two sections are enough to use the server and to know what a number means. The sections after that are for people who work with the safety data, and for people who run or review the process. A chat model can call the same tools and draft a summary. That agent is described with the server, at each layer, and the commands are in [section 10](#10-the-summary-agent). An on-demand grade of that draft is in [section 11](#11-grading-the-draft). Publishing the image, and starting a copy that scales to zero, are in [section 12](#12-publishing-and-deploying-this-mcp-server). The picture of the pieces, what an idle month costs, and a five-minute start are in [section 13](#13-the-shape-of-this-mcp-server). The threat model is [SECURITY.md](SECURITY.md).
 
 ## 1. What you can ask this MCP server
 
@@ -43,6 +43,10 @@ A push to the main branch builds that HTTP server as an image, scans it, and pub
 `pv-agent` asks a chat model to call the three tools and write one Markdown note for one drug. It stops before anything is saved. You read the draft, keep it, or replace it with a file of your own. The note you accept is written under `reports/`. A Groq key is required for a live draft. The commands are in [section 10](#10-the-summary-agent). The tests never call Groq.
 
 Twelve recorded cases can grade a draft. They look at which tools were called, whether each number in the note appears in those tool results, whether a sentence planted in a report or a label was obeyed, and whether the disclaimer is there. That grade calls the chat model, so it runs when you ask. The command is in [section 11](#11-grading-the-draft).
+
+### What it costs
+
+A checkout on your machine has no cloud bill. openFDA's anonymous quota is enough for a few questions. An optional free key raises that quota. The agent and the evaluation spend the chat provider's free tier only when you run them. An Azure copy is built to sleep at zero replicas, so an idle month stays near the budget of 5 in the subscription's currency. The figures are in [section 13](#13-the-shape-of-this-mcp-server).
 
 ### What a careful reading looks like
 
@@ -264,6 +268,8 @@ The pytest suite never calls openFDA and never calls Groq. Tool contracts run th
 
 The workflow cancels a superseded run on the same ref. It has `contents: read` only.
 
+[SECURITY.md](SECURITY.md) is the threat model: poisoned tool text, data leaving the process, a caller who tries to overwhelm the quota, and the supply chain. The table above is when each check runs. The file says what those checks do not close.
+
 The tests are grouped by the promise they lock:
 
 | File | Promise |
@@ -280,6 +286,7 @@ The tests are grouped by the promise they lock:
 | `tests/test_agent_cli.py` | `pv-agent draft` prints the thread id. An empty drug exits. Resume writes the edited file. A missing Groq key is refused before a provider client is built |
 | `tests/test_eval.py` | Twelve cases, each check failing and passing, a scripted run through the real graph, the reply cache, the report, and a missing Groq key. Groq is not called |
 | `tests/test_release.py` | The image workflow scans before it pushes, the deploy workflow is manual and uses OIDC, the template scales to zero and budgets the group, and the image stays a non-root server without the agent extra |
+| `tests/test_docs.py` | `SECURITY.md` names the four abuses, and this README keeps the architecture picture, the cost, and the Compose command |
 
 ruff, mypy, and the pinned lockfile keep that contract from drifting between machines. pip-audit watches the runtime set for published vulnerabilities. Trivy watches the image, in the build workflow, and the SBOM from that run is the artifact to keep.
 
@@ -307,7 +314,7 @@ Another program can connect over stdio or over HTTP without embedding this proce
 
 The grade in [section 11](#11-grading-the-draft) is not a new protocol feature. It runs the same graph with recorded tool results standing in for the server, so a live model can be checked without changing what the server returns.
 
-Publishing the image and running it in Azure does not add a tool, a resource, or a prompt. The remote process is the same HTTP server.
+Publishing the image and running it in Azure does not add a tool, a resource, or a prompt. The remote process is the same HTTP server. [Section 13](#13-the-shape-of-this-mcp-server) draws those pieces. [SECURITY.md](SECURITY.md) says which abuses that shape holds, and which it leaves with the person reading the draft.
 
 ## 7. Why the surface is this shape
 
@@ -335,7 +342,7 @@ The evaluation uses recorded payloads so a count cannot change between runs, and
 
 ## 8. Milestones, and MCP ideas beyond them
 
-M1 through M6 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). M5 is the on-demand grade of that agent in [section 11](#11-grading-the-draft). M6 is the image, the scan, and the manual Azure deployment in [section 12](#12-publishing-and-deploying-this-mcp-server). M7 is still planned. None of these milestones adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
+M1 through M7 are in the repository. M1 and M2 are the server this document describes: the three tools, the methodology resource, the summary prompt, stdio, Streamable HTTP, the dev token, the audit line, the cache, and Compose. M3 is the continuous integration workflow in [section 5](#5-what-is-checked-and-when). M4 is the summary agent in [section 10](#10-the-summary-agent). M5 is the on-demand grade of that agent in [section 11](#11-grading-the-draft). M6 is the image, the scan, and the manual Azure deployment in [section 12](#12-publishing-and-deploying-this-mcp-server). M7 is this account: the picture and the cost in [section 13](#13-the-shape-of-this-mcp-server), and the threat model in [SECURITY.md](SECURITY.md). None of these milestones adds resource templates, argument completion, elicitation, sampling, or a new pharmacovigilance judgment on the server.
 
 ### M4 — an agent that uses the tools
 
@@ -351,9 +358,9 @@ M1 through M6 are in the repository. M1 and M2 are the server this document desc
 
 ### M7 — the written account of the system
 
-This README is the layered account of the server, including the example session below. [0005](docs/adr/0005-agent-client.md) records the agent client, [0003](docs/adr/0003-untrusted-tool-output.md) records how a draft is judged when tool output is untrusted, and [0006](docs/adr/0006-deployment-target-and-cost.md) records the deployment and its cost. M7 still adds an architecture diagram and `SECURITY.md` for the threat model (prompt injection, data exfiltration, denial of service, supply chain). M7 documents the server. It does not extend it.
+This README is the layered account of the server, including the example session below and the picture in [section 13](#13-the-shape-of-this-mcp-server). [SECURITY.md](SECURITY.md) is the threat model: poisoned tool text, data leaving the process, denial of service, and the supply chain. [0005](docs/adr/0005-agent-client.md) records the agent client, [0003](docs/adr/0003-untrusted-tool-output.md) records how a draft is judged when tool output is untrusted, and [0006](docs/adr/0006-deployment-target-and-cost.md) records the deployment and its cost. M7 documents the server. It does not extend it.
 
-ClinicalTrials.gov is not in M7. It stays out while the FAERS path is the one the agent and the evaluation rely on.
+ClinicalTrials.gov stays off this list. The FAERS path is the one the agent and the evaluation rely on.
 
 ### Later, not on this list
 
@@ -394,7 +401,7 @@ A desktop client starts that command and speaks MCP on stdin and stdout. No bear
 }
 ```
 
-MCP Inspector can do the same with `npx @modelcontextprotocol/inspector uv run pv-mcp`.
+Claude Desktop uses that same `mcpServers` block in its configuration file. MCP Inspector can do the same with `npx @modelcontextprotocol/inspector uv run pv-mcp`. The Compose command is in [a five-minute start](#a-five-minute-start).
 
 ### MCP over HTTP
 
@@ -620,4 +627,91 @@ make teardown
 ```
 
 That deletes the resource group `rg-pv-mcp`. `./infra/teardown.sh other-group` deletes another name. The dev token check is unchanged. Entra is not the verifier for this copy.
+
+## 13. The shape of this MCP server
+
+This is the picture, the bill, and the short start. What a number means is in [section 2](#2-where-the-answers-come-from). How each piece behaves is in [section 4](#4-how-this-mcp-server-behaves). What is still open after the controls is in [SECURITY.md](SECURITY.md).
+
+### Who talks to whom
+
+A person asks in a desktop host, or asks the agent to draft a note. The host and the agent both call pv-mcp. The server reads openFDA and keeps a local cache. The agent sends the tool results to a chat model, then stops for the person.
+
+```mermaid
+flowchart LR
+  person[Person]
+  host["Cursor, Claude Desktop, or Inspector"]
+  agent[pv-agent]
+  server[pv-mcp]
+  fda[openFDA FAERS and labels]
+  cache[(SQLite cache)]
+  model[Chat model]
+
+  person --> host
+  person --> agent
+  host -->|stdio or HTTP| server
+  agent -->|MCP tools| server
+  server --> fda
+  server --> cache
+  agent --> model
+  agent -->|draft for review| person
+```
+
+A push checks the code. A push to main builds the image, scans it, and publishes it. Starting the copy in Azure is a separate, manual step. The evaluation is manual too.
+
+```mermaid
+flowchart LR
+  push[Push]
+  ci["ci.yml: ruff, mypy, pytest, pip-audit"]
+  build["build.yml: Trivy and the SBOM"]
+  ghcr[GHCR]
+  deploy["deploy.yml: OIDC"]
+  aca["Container Apps, minimum 0 replicas"]
+  eval["eval.yml, on demand"]
+  report[Markdown report]
+
+  push --> ci
+  push --> build
+  build --> ghcr
+  ghcr --> aca
+  deploy --> aca
+  eval --> report
+```
+
+### What it costs
+
+| Use | Bill |
+| --- | --- |
+| stdio, or Compose, on your machine | No cloud bill. openFDA's anonymous quota, or an optional free key |
+| `pv-agent` or `pv-eval` | The chat provider's free tier, and only for the run you start |
+| The image on GHCR | The public package. A private package is not given a registry password |
+| Azure, while nobody is calling | Minimum 0 replicas. The app is not billed for a replica that is asleep |
+| Azure, while a request is in flight | Consumption for 0.25 CPU and 0.5 GiB, and at most one replica |
+| The month | A budget of 5, in the subscription's billing currency. Mail at half and at the full amount. The mail does not stop the app |
+
+There is no Log Analytics workspace and no managed disk. The decision is [docs/adr/0006-deployment-target-and-cost.md](docs/adr/0006-deployment-target-and-cost.md).
+
+### A five-minute start
+
+From a checkout, with [uv](https://docs.astral.sh/uv/) installed:
+
+```bash
+uv sync
+uv run pv-mcp
+```
+
+Point Cursor or Claude Desktop at that command with the `mcpServers` block in [the worked session](#local-client-over-stdio). Or open Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector uv run pv-mcp
+```
+
+Ask what the public reports and the label say about one plain drug name, such as `ibuprofen`.
+
+For the HTTP door, put a long random value in `PV_MCP_TOKEN` in `.env`, then:
+
+```bash
+docker compose up --build
+```
+
+The server is at `http://127.0.0.1:8000/mcp`. The client sends `Authorization: Bearer <PV_MCP_TOKEN>`. A call with no token receives HTTP 401. The fields of one drug are in [section 9](#9-a-worked-session-with-this-mcp-server).
 
